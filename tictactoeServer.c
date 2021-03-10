@@ -19,6 +19,10 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
+/*************************/
+/* ENVIRONMENT CONSTANTS */
+/*************************/
+
 /* The protocol version number used. */
 #define VERSION 4
 
@@ -46,6 +50,10 @@
 /* The baord marker used for Player 2 */
 #define P2_MARK 'O'
 
+/**************************/
+/* ENVIRONMENT STRUCTURES */
+/**************************/
+
 /* Structure to send and recieve player datagrams. */
 struct Buffer {
     char version;   // version number
@@ -68,30 +76,18 @@ struct TTT_Game {
     char board[ROWS*COLUMNS];       // TicTacToe game board state
 };
 
-/*******************/
-/* PLAYER COMMANDS */
-/*******************/
+/*****************************/
+/* GENERAL PURPOSE FUNCTIONS */
+/*****************************/
 
-/* Function pointer type for function to handle player commands. */
-typedef void (*command_handler)(int sd, const struct sockaddr_in *playerAddr, const struct Buffer *datagram, struct TTT_Game *game);
-/* The command to begin a new game. */
-#define NEW_GAME 0x00
-/* The command to issue a move. */
-#define MOVE 0x01
-/* The command to signal that the game has ended. */
-#define GAME_OVER 0x02
-
-void new_game(int sd, const struct sockaddr_in *playerAddr, const struct Buffer *datagram, struct TTT_Game *game);
-void move(int sd, const struct sockaddr_in *playerAddr, const struct Buffer *datagram, struct TTT_Game *game);
-void game_over(int sd, const struct sockaddr_in *playerAddr, const struct Buffer *datagram, struct TTT_Game *game);
+void print_error(const char *msg, int errnum, int terminate);
+void handle_init_error(const char *msg, int errnum);
+void extract_args(char *argv[], int *port);
 
 /********************************/
 /* SOCKET AND NETWORK FUNCTIONS */
 /********************************/
 
-void print_error(const char *msg, int errnum, int terminate);
-void handle_init_error(const char *msg, int errnum);
-void extract_args(char *argv[], int *port);
 void print_server_info(struct sockaddr_in serverAddr);
 int create_endpoint(struct sockaddr_in *socketAddr, unsigned long address, int port);
 void set_timeout(int sd, int seconds);
@@ -120,6 +116,23 @@ void print_board(const struct TTT_Game *game);
 int check_game_over(struct TTT_Game *game);
 void send_game_over(int sd, struct TTT_Game *game);
 void tictactoe(int sd);
+
+/*******************/
+/* PLAYER COMMANDS */
+/*******************/
+
+/* Function pointer type for function to handle player commands. */
+typedef void (*command_handler)(int sd, const struct sockaddr_in *playerAddr, const struct Buffer *datagram, struct TTT_Game *game);
+/* The command to begin a new game. */
+#define NEW_GAME 0x00
+/* The command to issue a move. */
+#define MOVE 0x01
+/* The command to signal that the game has ended. */
+#define GAME_OVER 0x02
+
+void new_game(int sd, const struct sockaddr_in *playerAddr, const struct Buffer *datagram, struct TTT_Game *game);
+void move(int sd, const struct sockaddr_in *playerAddr, const struct Buffer *datagram, struct TTT_Game *game);
+void game_over(int sd, const struct sockaddr_in *playerAddr, const struct Buffer *datagram, struct TTT_Game *game);
 
 /**
  * @brief This program creates and sets up a TicTacToe server which acts as Player 1 in a
@@ -873,7 +886,7 @@ void send_game_over(int sd, struct TTT_Game *game) {
 void tictactoe(int sd) {
     int waitPrompt = 1;
     struct TTT_Game gameRoster[MAX_GAMES] = {{0}};
-    command_handler commands[] = {new_game, move};
+    command_handler commands[] = {new_game, move, game_over};
 
     /* Initialize all games and server timeout time */
     init_game_roster(gameRoster);
