@@ -20,7 +20,7 @@
 #include <arpa/inet.h>
 
 /* The protocol version number used. */
-#define VERSION 3
+#define VERSION 4
 
 /* The number of command line arguments. */
 #define NUM_ARGS 2
@@ -28,8 +28,12 @@
 #define BUFFER_SIZE 100
 /* The error code used to signal an invalid move. */
 #define ERROR_CODE -1
-/* The number of seconds spend waiting before a timeout. */
-#define TIMEOUT 30
+/* The number of seconds spend waiting before a game times out. */
+#define GAME_TIMEOUT 5
+/* The number of TODO . */
+#define MAX_RESEND 5
+/* The number of seconds spend waiting before the server times out. */
+#define SERVER_TIMEOUT (2*GAME_TIMEOUT)
 
 /* The number of rows for the TicIacToe board. */
 #define ROWS 3
@@ -42,21 +46,26 @@
 /* The baord marker used for Player 2 */
 #define P2_MARK 'O'
 
-/* Structure for each game of TicTacToe. */
-struct TTT_Game {
-    int gameNum;                    // game number
-    double timeout;                 // amount of time before game timeout
-    struct sockaddr_in p2Address;   // address of remote player for game
-    int player;                     // current player's turn
-    char board[ROWS*COLUMNS];       // TicTacToe game board state
-};
-
 /* Structure to send and recieve player datagrams. */
 struct Buffer {
     char version;   // version number
+    char seqNum;    // sequence number
     char command;   // player command
     char data;      // data for command if applicable
     char gameNum;   // game number
+};
+
+/* Structure for each game of TicTacToe. */
+struct TTT_Game {
+    int gameNum;                    // game number
+    int seqNum;                     // sequence number the game is currently on
+    double timeout;                 // amount of time before game timeout
+    int resends;                    // TODO
+    struct sockaddr_in p2Address;   // address of remote player for game
+    int player;                     // current player's turn
+    int winner;                     // TODO
+    struct Buffer lastSent;         // the previous command that was sent in the game
+    char board[ROWS*COLUMNS];       // TicTacToe game board state
 };
 
 /*******************/
@@ -69,9 +78,12 @@ typedef void (*command_handler)(int sd, const struct sockaddr_in *playerAddr, co
 #define NEW_GAME 0x00
 /* The command to issue a move. */
 #define MOVE 0x01
+/* The command to signal that the game has ended. */
+#define GAME_OVER 0x02
 
 void new_game(int sd, const struct sockaddr_in *playerAddr, const struct Buffer *datagram, struct TTT_Game *game);
 void move(int sd, const struct sockaddr_in *playerAddr, const struct Buffer *datagram, struct TTT_Game *game);
+void game_over(int sd, const struct sockaddr_in *playerAddr, const struct Buffer *datagram, struct TTT_Game *game);
 
 /********************************/
 /* SOCKET AND NETWORK FUNCTIONS */
@@ -83,7 +95,7 @@ void extract_args(char *argv[], int *port);
 void print_server_info(struct sockaddr_in serverAddr);
 int create_endpoint(struct sockaddr_in *socketAddr, unsigned long address, int port);
 void set_timeout(int sd, int seconds);
-void check_timeout(struct TTT_Game roster[MAX_GAMES]);
+void check_timeout(int sd, struct TTT_Game roster[MAX_GAMES]);
 int same_address(const struct sockaddr_in *addr1, const struct sockaddr_in *addr2);
 
 /******************************/
@@ -91,19 +103,22 @@ int same_address(const struct sockaddr_in *addr1, const struct sockaddr_in *addr
 /******************************/
 
 void init_shared_state(struct TTT_Game *game);
+void reset_game(struct TTT_Game *game);
 void init_game_roster(struct TTT_Game roster[MAX_GAMES]);
 int games_in_progress(struct TTT_Game roster[MAX_GAMES]);
 int find_open_game(struct TTT_Game roster[MAX_GAMES]);
 int get_command(int sd, struct sockaddr_in *playerAddr, struct Buffer *datagram);
+int validate_sequence_num(const struct sockaddr_in *playerAddr, const struct Buffer *datagram, const struct TTT_Game *game);
+void resend_command(int sd, struct TTT_Game *game);
+int validate_move(int choice, const struct TTT_Game *game);
 int minimax(struct TTT_Game *game, int depth, int isMax);
 int find_best_move(struct TTT_Game *game);
+int send_p1_move(int sd, struct TTT_Game *game);
 int check_win(const struct TTT_Game *game);
 int check_draw(const struct TTT_Game *game);
 void print_board(const struct TTT_Game *game);
-int validate_move(int choice, const struct TTT_Game *game);
-int send_p1_move(int sd, struct TTT_Game *game);
-void free_game(struct TTT_Game *game);
-int game_over(struct TTT_Game *game);
+int check_game_over(struct TTT_Game *game);
+void send_game_over(int sd, struct TTT_Game *game);
 void tictactoe(int sd);
 
 /**
@@ -270,18 +285,20 @@ void set_timeout(int sd, int seconds) {
  * @brief Checks each TicTacToe game to see if it has timed out or not. If one has, that game
  * is reset.
  * 
+ * @param sd The socket descriptor of the server comminication endpoint.
  * @param roster The array of playable TicTacToe games.
  */
-void check_timeout(struct TTT_Game roster[MAX_GAMES]) {
+void check_timeout(int sd, struct TTT_Game roster[MAX_GAMES]) {
     int i;
     /* Searches over all games */
     for (i = 0; i < MAX_GAMES; i++) {
+        struct TTT_Game *game = &roster[i];
         /* Check if current game timeout has expired */
-        if (roster[i].timeout <= 0) {
-            printf("[+]Game #%d has timed out.\n", roster[i].gameNum);
-            printf("Player at %s (port %d) ran out of time to respond.\n", inet_ntoa(roster[i].p2Address.sin_addr), roster[i].p2Address.sin_port);
-            /* Reset the current game */
-            free_game(&roster[i]);
+        if (game->timeout <= 0) {
+            printf("[+]Game #%d has timed out.\n", game->gameNum);
+            /* TODO */
+            printf("Player at %s (port %d) likely lost the previous command\n", inet_ntoa(game->p2Address.sin_addr), game->p2Address.sin_port);
+            resend_command(sd, game);
         }
     }
 }
@@ -315,6 +332,26 @@ void init_shared_state(struct TTT_Game *game) {
 }
 
 /**
+ * @brief Resets the current game for a new player.
+ * 
+ * @param game The current game of TicTacToe being played.
+ */
+void reset_game(struct TTT_Game *game) {
+    struct sockaddr_in blankAddr = {0};
+    struct Buffer blankCommand = {0};
+    if (game->gameNum > 0) printf("Game #%d has ended. Resetting game for new player.\n", game->gameNum);
+    /* Reset game attributes */
+    game->seqNum = 0;
+    game->timeout = GAME_TIMEOUT;
+    game->resends = MAX_RESEND;
+    game->p2Address = blankAddr;
+    game->winner = -1;
+    game->lastSent = blankCommand;
+    /* Reset game board */
+    init_shared_state(game);
+}
+
+/**
  * @brief Initializes the starting state of each game of TicTacToe in the current game roster.
  * 
  * @param roster The array of playable TicTacToe games.
@@ -324,14 +361,11 @@ void init_game_roster(struct TTT_Game roster[MAX_GAMES]) {
     printf("[+]Initializing shared game states.\n");
     /* Iterates over all games */
     for (i = 0;  i < MAX_GAMES; i++) {
-        struct sockaddr_in blankAddr = {0};
+        struct TTT_Game *game = &roster[i];
         /* Initialize current game attributes to default values */
-        roster[i].timeout = TIMEOUT;
-        roster[i].p2Address = blankAddr;
-        roster[i].gameNum = i+1;
-        roster[i].player = 0;
-        /* Initialize current game board */
-        init_shared_state(&roster[i]);
+        reset_game(game);
+        /* TODO */
+        game->gameNum = i+1;
     }
 }
 
@@ -345,8 +379,9 @@ int games_in_progress(struct TTT_Game roster[MAX_GAMES]) {
     int i, count = 0;
     /* Searches over all games */
     for (i = 0; i < MAX_GAMES; i++) {
+        struct TTT_Game *game = &roster[i];
         /* Check if current game still in default state or has been started */
-        if (roster[i].player != 0) count++;
+        if (game->seqNum > 0) count++;
     }
     return count;
 }
@@ -361,8 +396,9 @@ int find_open_game(struct TTT_Game roster[MAX_GAMES]) {
     int i, gameIndex = ERROR_CODE;
     /* Searches over all games */
     for (i = 0; i < MAX_GAMES; i++) {
+        struct TTT_Game *game = &roster[i];
         /* Check if current game is being played */
-        if (roster[i].player == 0) {
+        if (game->seqNum == 0) {
             gameIndex = i;
             break;
         }
@@ -399,7 +435,10 @@ int get_command(int sd, struct sockaddr_in *playerAddr, struct Buffer *datagram)
     } else if (datagram->version != VERSION) {  // check for correct version
         print_error("get_command: Protocol version not supported. Datagram discarded", 0, 0);
         return ERROR_CODE;
-    } else if (datagram->command < NEW_GAME || datagram->command > MOVE) {  // check for valid command
+    } else if (datagram->seqNum < 0) {  // check for valid sequence number
+        print_error("get_command: Invalid sequence number. Datagram discarded", 0, 0);
+        return ERROR_CODE;
+    } else if (datagram->command < NEW_GAME || datagram->command > GAME_OVER) {  // check for valid command
         print_error("get_command: Invalid command. Datagram discarded", 0, 0);
         return ERROR_CODE;
     } else if (datagram->command != NEW_GAME && (datagram->gameNum < 1 || datagram->gameNum > MAX_GAMES)) { // check for valid game number
@@ -421,8 +460,10 @@ int get_command(int sd, struct sockaddr_in *playerAddr, struct Buffer *datagram)
 void new_game(int sd, const struct sockaddr_in *playerAddr, const struct Buffer *datagram, struct TTT_Game *game) {
     int move;
     printf("Player at %s (port %d) issued a NEW_GAME command.\n", inet_ntoa(playerAddr->sin_addr), playerAddr->sin_port);
-    /* Check that there was an game open to play */
+    /* Check that there was an open game to play */
     if (game != NULL) {
+        /* TODO */
+        game->seqNum++;
         /* Register player address to game and initialize the board */
         game->p2Address = *playerAddr;
         init_shared_state(game);
@@ -430,12 +471,11 @@ void new_game(int sd, const struct sockaddr_in *playerAddr, const struct Buffer 
         /* Get first move to send to remote player */
         if ((move = send_p1_move(sd, game)) == ERROR_CODE) {
             /* Reset game if there was an error sending the move */
-            free_game(game);
+            reset_game(game);
             return;
         }
-        /* Update and print game board, and change turns */
+        /* Update and print game board */
         game->board[move-1] = P1_MARK;
-        game->player = 2;
         print_board(game);
     } else {
         print_error("new_game: Unable to find an open game", 0, 0);
@@ -457,33 +497,138 @@ void move(int sd, const struct sockaddr_in *playerAddr, const struct Buffer *dat
     int move = datagram->data - '0';
     printf("Player at %s (port %d) issued a MOVE command.\n", inet_ntoa(playerAddr->sin_addr), playerAddr->sin_port);
     printf("********  Game #%d  ********\n", game->gameNum);
-    /* Check that the move came from the player registered to the game */
+    /* Check that the command came from the player registered to the game */
     if (same_address(playerAddr, &game->p2Address)) {
         printf("Player 2 chose the move:  %c\n", datagram->data);
         /* Check that the received move is valid */
         if (validate_move(move, game)) {
+            /* TODO */
+            game->seqNum++;
             /* Update the board (for Player 2) and check if someone won */
             game->board[move-1] = P2_MARK;
-            if (game_over(game)) return;
-            /* If nobody won, change turns and make a move to send to the remote player */
-            game->player = 1;
-            if ((move = send_p1_move(sd, game)) == ERROR_CODE) {
-                free_game(game);    
+            if (check_game_over(game)) {
+                send_game_over(sd, game);
                 return;
             }
-            /* Update the board (for Player 1) and check if someone won */
+            /* If nobody won, make a move to send to the remote player */
+            if ((move = send_p1_move(sd, game)) == ERROR_CODE) {
+                reset_game(game);    
+                return;
+            }
+            /* Update the board (for Player 1) and print the board after the exchange*/
             game->board[move-1] = P1_MARK;
-            if (game_over(game)) return;
-            /* If nobody won, change turns and print the board after the exchange */
-            game->player = 2;
             print_board(game);
         } else {
-            free_game(game);
+            reset_game(game);
         }
     } else {
         print_error("move: Player address does not match that registered to game", 0, 0);
         printf("Game address: %s (port %d)\n", inet_ntoa(game->p2Address.sin_addr), game->p2Address.sin_port);
     }
+}
+
+/**
+ * @brief Handles the GAME_OVER command from the remote player. TODO
+ * 
+ * @param sd The socket descriptor of the server comminication endpoint.
+ * @param playerAddr The address of the remote player.
+ * @param datagram The datagram containing the command that the remote player sends.
+ * @param game The current game of TicTacToe being played.
+ */
+void game_over(int sd, const struct sockaddr_in *playerAddr, const struct Buffer *datagram, struct TTT_Game *game) {
+    printf("Player at %s (port %d) issued a GAME_OVER command.\n", inet_ntoa(playerAddr->sin_addr), playerAddr->sin_port);
+    printf("********  Game #%d  ********\n", game->gameNum);
+    /* Check that the command came from the player registered to the game */
+    if (same_address(playerAddr, &game->p2Address)) {
+        if (game->lastSent.command != GAME_OVER) {
+            if (check_game_over(game)) {
+                send_game_over(sd, game);
+            } else {
+                print_error("game_over: Game is still in progress", 0, 0);
+                printf("Player 2 has decided to leave the game\n");
+                reset_game(game);
+            }
+        } else {
+            reset_game(game);
+        }
+    } else {
+        print_error("move: Player address does not match that registered to game", 0, 0);
+        printf("Game address: %s (port %d)\n", inet_ntoa(game->p2Address.sin_addr), game->p2Address.sin_port);
+    }
+}
+
+/**
+ * @brief TODO
+ * 
+ * @param playerAddr The address of the remote player.
+ * @param datagram The datagram containing the command that the remote player sends.
+ * @param game The current game of TicTacToe being played.
+ * @return TODO 
+ */
+int validate_sequence_num(const struct sockaddr_in *playerAddr, const struct Buffer *datagram, const struct TTT_Game *game) {
+    if (game != NULL && same_address(playerAddr, &game->p2Address)) {
+        if (datagram->seqNum > game->seqNum) {
+            printf("[+]Game #%d received an invalid sequence number.\n", game->gameNum);
+            return -1;
+        } else if (datagram->seqNum == game->seqNum-1) {
+            printf("[+]Game #%d received a duplicate command.\n", game->gameNum);
+            return 0;
+        } else {
+            return 1;
+        }
+    } else {
+        return 1;
+    }
+}
+
+/**
+ * @brief TODO
+ * 
+ * @param sd The socket descriptor of the server comminication endpoint.
+ * @param game The current game of TicTacToe being played.
+ */
+void resend_command(int sd, struct TTT_Game *game) {
+    /* TODO */
+    if (game->resends-- > 0) {
+        struct Buffer datagram = game->lastSent;
+        char v = datagram.version, sn = datagram.seqNum, cmd = datagram.command, data = datagram.data, gn = datagram.gameNum;
+        printf("Resending the previous command... \n\t%2X %2X %2X %2X %2X\n", v, sn, cmd, data, gn);
+        if (sendto(sd, &datagram, sizeof(struct Buffer), 0, (struct sockaddr *)&game->p2Address, sizeof(struct sockaddr_in)) < 0) {
+            print_error("resend_command", errno, 0);
+            reset_game(game);
+        }
+    } else {
+        print_error("resend_command: Exceeded maximum allowed resend attempts", 0, 0);
+        reset_game(game);
+    }
+}
+
+/**
+ * @brief Determines whether a given move is legal (i.e. number 1-9) and valid (i.e. hasn't
+ * already been played) for the current game.
+ * 
+ * @param choice The player move to be validated.
+ * @param game The current game of TicTacToe being played.
+ * @return True if the given move if valid based on the current board, false otherwise. 
+ */
+int validate_move(int choice, const struct TTT_Game *game) {
+    /* Check to see if the choice is a move on the board */
+    if (choice < 1 || choice > 9) {
+        print_error("Invalid move: Must be a number [1-9]", 0, 0);
+        return 0;
+    }
+    /* Check to see if the square chosen has a digit in it, if */
+    /* square 8 has an '8' then it is a valid choice */
+    if (game->board[choice-1] != (choice + '0')) {
+        print_error("Invalid move: Square already taken", 0, 0);
+        return 0;
+    }
+    /* TODO */
+    if (game->winner > 0) {
+        print_error("Invalid move: Winning move has already been made", 0, 0);
+        return 0;
+    }
+    return 1;
 }
 
 /**
@@ -573,6 +718,35 @@ int find_best_move(struct TTT_Game *game) {
 }
 
 /**
+ * @brief Sends Player 1's move to the remote player.
+ * 
+ * @param sd The socket descriptor of the server comminication endpoint.
+ * @param game The current game of TicTacToe being played.
+ * @return The move that was sent, or an error code if there was an issue. 
+ */
+int send_p1_move(int sd, struct TTT_Game *game) {
+    struct Buffer datagram = {0};
+    /* Get move to send to remote player */
+    int move = find_best_move(game);
+    while (!validate_move(move, game)) move = find_best_move(game);
+    /* Pack move information into datagram */
+    datagram.version = VERSION;
+    datagram.seqNum = game->seqNum++;
+    datagram.command = MOVE;
+    datagram.data = move + '0';
+    datagram.gameNum = game->gameNum;
+    /* Send the move to the remote player */
+    printf("Server sent the move:  %c\n", datagram.data);
+    if (sendto(sd, &datagram, sizeof(struct Buffer), 0, (struct sockaddr *)&game->p2Address, sizeof(struct sockaddr_in)) < 0) {
+        print_error("send_p1_move", errno, 0);
+        return ERROR_CODE;
+    }
+    /* TODO */
+    game->lastSent = datagram;
+    return (datagram.data - '0');
+}
+
+/**
  * @brief Determines if someone has won the game yet or not.
  * 
  * @param game The current game of TicTacToe being played.
@@ -646,93 +820,48 @@ void print_board(const struct TTT_Game *game) {
 }
 
 /**
- * @brief Determines whether a given move is legal (i.e. number 1-9) and valid (i.e. hasn't
- * already been played) for the current game.
- * 
- * @param choice The player move to be validated.
- * @param game The current game of TicTacToe being played.
- * @return True if the given move if valid based on the current board, false otherwise. 
- */
-int validate_move(int choice, const struct TTT_Game *game) {
-    /* Check to see if the choice is a move on the board */
-    if (choice < 1 || choice > 9) {
-        print_error("Invalid move: Must be a number [1-9]", 0, 0);
-        return 0;
-    }
-    /* Check to see if the square chosen has a digit in it, if */
-    /* square 8 has an '8' then it is a valid choice */
-    if (game->board[choice-1] != (choice + '0')) {
-        print_error("Invalid move: Square already taken", 0, 0);
-        return 0;
-    }
-    return 1;
-}
-
-/**
- * @brief Sends Player 1's move to the remote player.
- * 
- * @param sd The socket descriptor of the server comminication endpoint.
- * @param game The current game of TicTacToe being played.
- * @return The move that was sent, or an error code if there was an issue. 
- */
-int send_p1_move(int sd, struct TTT_Game *game) {
-    struct Buffer datagram = {0};
-    /* Get move to send to remote player */
-    int move = find_best_move(game);
-    while (!validate_move(move, game)) move = find_best_move(game);
-    /* Pack move information into datagram */
-    datagram.version = VERSION;
-    datagram.command = MOVE;
-    datagram.data = move + '0';
-    datagram.gameNum = game->gameNum;
-    /* Send the move to the remote player */
-    printf("Server sent the move:  %c\n", datagram.data);
-    if (sendto(sd, &datagram, sizeof(struct Buffer), 0, (struct sockaddr *)&game->p2Address, sizeof(struct sockaddr_in)) < 0) {
-        print_error("send_p1_move", errno, 0);
-        return ERROR_CODE;
-    }
-    return (datagram.data - '0');
-}
-
-/**
- * @brief Resets the current game for a new player.
- * 
- * @param game The current game of TicTacToe being played.
- */
-void free_game(struct TTT_Game *game) {
-    struct sockaddr_in blankAddr = {0};
-    printf("Game #%d has ended. Resetting game for new player.\n", game->gameNum);
-    /* Reset game attributes */
-    game->timeout = TIMEOUT;
-    game->p2Address = blankAddr;
-    game->player = 0;
-    /* Reset game board */
-    init_shared_state(game);
-}
-
-/**
- * @brief Checks if the current game has ended, prints the appropriate message if so,
- * and resets the game for a new player.
+ * @brief Checks if the current game has ended and prints the appropriate message.
  * 
  * @param game The current game of TicTacToe being played.
  * @return True if the game has ended, false otherwise. 
  */
-int game_over(struct TTT_Game *game) {
+int check_game_over(struct TTT_Game *game) {
+    int score;
     /* Check if somebody won the game */
-    if (check_win(game) != 0) {
-        /* Print final game board and winning player */
-        print_board(game);
-        printf("==>\a Player %d wins\n", game->player);
+    if ((score = check_win(game))) {
+        game->winner = (score > 0) ? 1 : 2;
     } else if (check_draw(game)) {
-        /* Print final game board and that the game was a draw */
-        print_board(game);
-        printf("==>\a It's a draw\n");
+        game->winner = 0;
     } else {
         return 0;
     }
-    /* Reset the game for a new player */
-    free_game(game);
+    /* Print final game board and winning player */
+    print_board(game);
+    (game->winner == 0) ? printf("==>\a It's a draw\n") : printf("==>\a Player %d wins\n", game->winner);
     return 1;
+}
+
+/**
+ * @brief Sends TODO to the remote player.
+ * 
+ * @param sd The socket descriptor of the server comminication endpoint.
+ * @param game The current game of TicTacToe being played.
+ */
+void send_game_over(int sd, struct TTT_Game *game) {
+    struct Buffer datagram = {0};
+    /* Pack command information into datagram */
+    datagram.version = VERSION;
+    datagram.seqNum = game->seqNum++;
+    datagram.command = GAME_OVER;
+    datagram.gameNum = game->gameNum;
+    /* TODO */
+    game->lastSent = datagram;
+    game->timeout = 2 * GAME_TIMEOUT;
+    /* Send the command to the remote player */
+    if (sendto(sd, &datagram, sizeof(struct Buffer), 0, (struct sockaddr *)&game->p2Address, sizeof(struct sockaddr_in)) < 0) {
+        print_error("send_game_over", errno, 0);
+        reset_game(game);
+    }
 }
 
 /**
@@ -748,7 +877,7 @@ void tictactoe(int sd) {
 
     /* Initialize all games and server timeout time */
     init_game_roster(gameRoster);
-    set_timeout(sd, TIMEOUT);
+    set_timeout(sd, SERVER_TIMEOUT);
     /* Play all the games */
     while (1) {
         int rv;
@@ -761,24 +890,44 @@ void tictactoe(int sd) {
         /* Wait for a command to be received */
         if ((rv = get_command(sd, &playerAddr, &datagram)) > 0) {
             int i, gameIndx = (datagram.command == NEW_GAME) ? find_open_game(gameRoster) : datagram.gameNum-1;
-            commands[(int)datagram.command](sd, &playerAddr, &datagram, (gameIndx < 0) ? NULL : &gameRoster[gameIndx]);
+            struct TTT_Game *currentGame = (gameIndx < 0) ? NULL : &gameRoster[gameIndx];
+            if ((rv = validate_sequence_num(&playerAddr, &datagram, currentGame)) > 0) {
+                /* TODO */
+                commands[(int)datagram.command](sd, &playerAddr, &datagram, currentGame);
+                if (currentGame != NULL) currentGame->resends = MAX_RESEND;
+            } else if (rv == 0) {
+                /* TODO duplicate command */
+                resend_command(sd, currentGame);
+            } else {
+                /* TODO invalid sequence number */
+                print_error("tictactoe: Unable to process out of order command", 0, 0);
+                reset_game(currentGame);
+            }
             /* Stop clock for elapsed time from last command and update timeout clock for each ongoing game */
             stop = time(NULL);
             for (i = 0; i < MAX_GAMES; i++) {
+                struct TTT_Game *game = &gameRoster[i];
                 /* Check if game is being played and update timeout clock if so */
-                if (gameRoster[i].player != 0) gameRoster[i].timeout -= difftime(stop, start);
-                /* Reset timout clock for game that just received the command */
-                if (i == gameIndx) gameRoster[gameIndx].timeout = TIMEOUT;
+                if (game->seqNum > 0) game->timeout -= difftime(stop, start);
+                /* Reset timout clock for the game that just received the command */
+                if (i == gameIndx) game->timeout = GAME_TIMEOUT;
             }
-            /* Reset any game that has timed out */
-            check_timeout(gameRoster);
+            /* Reset any game that has timed out NOTE */
+            check_timeout(sd, gameRoster);
             waitPrompt = 1;
         } else if (rv == 0) {   // server has timed out
+            int i;
             /* Check if any games are currently being played */
             if (games_in_progress(gameRoster) > 0) {
-                print_error("tictactoe: Nobody has responded in a while. Resetting game states", 0, 0);
-                /* Reset all games */
-                init_game_roster(gameRoster);
+                print_error("tictactoe: Nobody has responded in a while. Resending game commands", 0, 0);
+                /* Reset all games NOTE */
+                for (i = 0; i < MAX_GAMES; i++) {
+                    struct TTT_Game *game = &gameRoster[i];
+                    if (game->seqNum > 0) {
+                        printf("Game #%d:", game->gameNum);
+                        resend_command(sd, game);
+                    }
+                }
                 waitPrompt = 1;
             } else {
                 waitPrompt = 0;
