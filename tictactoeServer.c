@@ -35,7 +35,7 @@
 /* The number of seconds spend waiting before a game times out. */
 #define GAME_TIMEOUT 5
 /* The number of TODO . */
-#define MAX_RESEND 5
+#define MAX_RESEND 2
 /* The number of seconds spend waiting before the server times out. */
 #define SERVER_TIMEOUT (2*GAME_TIMEOUT)
 
@@ -528,9 +528,9 @@ void move(int sd, const struct sockaddr_in *playerAddr, const struct Buffer *dat
                 reset_game(game);    
                 return;
             }
-            /* Update the board (for Player 1) and print the board after the exchange*/
+            /* Update the board (for Player 1) and check if someone won after the exchange */
             game->board[move-1] = P1_MARK;
-            print_board(game);
+            if (!check_game_over(game)) print_board(game);
         } else {
             reset_game(game);
         }
@@ -554,14 +554,20 @@ void game_over(int sd, const struct sockaddr_in *playerAddr, const struct Buffer
     /* Check that the command came from the player registered to the game */
     if (same_address(playerAddr, &game->p2Address)) {
         if (game->lastSent.command != GAME_OVER) {
-            if (check_game_over(game)) {
-                send_game_over(sd, game);
-            } else {
+            printf("Player 2 has signaled that the game is over\n");
+            if (game->winner < 0) {
+                
                 print_error("game_over: Game is still in progress", 0, 0);
                 printf("Player 2 has decided to leave the game\n");
                 reset_game(game);
+            } else {
+                printf("Server acknowledging that the game is over\n");
+                (game->winner == 0) ? printf("==>\a It's a draw\n") : printf("==>\a Player %d wins\n", game->winner);
+                send_game_over(sd, game);
             }
         } else {
+            printf("Player 2 has acknowledged that the game is over\n");
+            (game->winner == 0) ? printf("==>\a It's a draw\n") : printf("==>\a Player %d wins\n", game->winner);
             reset_game(game);
         }
     } else {
@@ -605,7 +611,7 @@ void resend_command(int sd, struct TTT_Game *game) {
     if (game->resends-- > 0) {
         struct Buffer datagram = game->lastSent;
         char v = datagram.version, sn = datagram.seqNum, cmd = datagram.command, data = datagram.data, gn = datagram.gameNum;
-        printf("Resending the previous command... \n\t%2X %2X %2X %2X %2X\n", v, sn, cmd, data, gn);
+        printf("Resending the previous command... \n\t0x%02X 0x%02X 0x%02X 0x%02X 0x%02X\n", v, sn, cmd, data, gn);
         if (sendto(sd, &datagram, sizeof(struct Buffer), 0, (struct sockaddr *)&game->p2Address, sizeof(struct sockaddr_in)) < 0) {
             print_error("resend_command", errno, 0);
             reset_game(game);
@@ -937,7 +943,7 @@ void tictactoe(int sd) {
                 for (i = 0; i < MAX_GAMES; i++) {
                     struct TTT_Game *game = &gameRoster[i];
                     if (game->seqNum > 0) {
-                        printf("Game #%d:", game->gameNum);
+                        printf("Game #%d: ", game->gameNum);
                         resend_command(sd, game);
                     }
                 }
