@@ -70,7 +70,6 @@ struct TTT_Game {
     double timeout;                 // amount of time before game timeout
     int resends;                    // TODO
     struct sockaddr_in p2Address;   // address of remote player for game
-    int player;                     // current player's turn
     int winner;                     // TODO
     struct Buffer lastSent;         // the previous command that was sent in the game
     char board[ROWS*COLUMNS];       // TicTacToe game board state
@@ -309,9 +308,14 @@ void check_timeout(int sd, struct TTT_Game roster[MAX_GAMES]) {
         /* Check if current game timeout has expired */
         if (game->timeout <= 0) {
             printf("[+]Game #%d has timed out.\n", game->gameNum);
-            /* TODO */
-            printf("Player at %s (port %d) likely lost the previous command\n", inet_ntoa(game->p2Address.sin_addr), game->p2Address.sin_port);
-            resend_command(sd, game);
+            if (game->winner < 0) {
+                /* TODO */
+                printf("Player at %s (port %d) likely lost the previous command\n", inet_ntoa(game->p2Address.sin_addr), game->p2Address.sin_port);
+                resend_command(sd, game);
+            } else {
+                printf("Haven't heard back after sending winning move\n");
+                reset_game(game);
+            }
         }
     }
 }
@@ -553,23 +557,14 @@ void game_over(int sd, const struct sockaddr_in *playerAddr, const struct Buffer
     printf("********  Game #%d  ********\n", game->gameNum);
     /* Check that the command came from the player registered to the game */
     if (same_address(playerAddr, &game->p2Address)) {
-        if (game->lastSent.command != GAME_OVER) {
-            printf("Player 2 has signaled that the game is over\n");
-            if (game->winner < 0) {
-                
-                print_error("game_over: Game is still in progress", 0, 0);
-                printf("Player 2 has decided to leave the game\n");
-                reset_game(game);
-            } else {
-                printf("Server acknowledging that the game is over\n");
-                (game->winner == 0) ? printf("==>\a It's a draw\n") : printf("==>\a Player %d wins\n", game->winner);
-                send_game_over(sd, game);
-            }
+        printf("Player 2 has signaled that the game is over\n");
+        if (game->winner < 0) {
+            print_error("game_over: Game is still in progress", 0, 0);
+            printf("Player 2 has decided to leave the game\n");
         } else {
-            printf("Player 2 has acknowledged that the game is over\n");
             (game->winner == 0) ? printf("==>\a It's a draw\n") : printf("==>\a Player %d wins\n", game->winner);
-            reset_game(game);
         }
+        reset_game(game);
     } else {
         print_error("move: Player address does not match that registered to game", 0, 0);
         printf("Game address: %s (port %d)\n", inet_ntoa(game->p2Address.sin_addr), game->p2Address.sin_port);
