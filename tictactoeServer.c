@@ -33,9 +33,9 @@
 /* The error code used to signal an invalid move. */
 #define ERROR_CODE -1
 /* The number of seconds spend waiting before a game times out. */
-#define GAME_TIMEOUT 5
+#define GAME_TIMEOUT 30
 /* The number of TODO . */
-#define MAX_RESEND 2
+#define MAX_RESEND 5
 /* The number of seconds spend waiting before the server times out. */
 #define SERVER_TIMEOUT (2*GAME_TIMEOUT)
 
@@ -308,7 +308,7 @@ void check_timeout(int sd, struct TTT_Game roster[MAX_GAMES]) {
         /* Check if current game timeout has expired */
         if (game->timeout <= 0) {
             printf("[+]Game #%d has timed out.\n", game->gameNum);
-            if (game->winner < 0) {
+            if (game->lastSent.command != GAME_OVER) {
                 /* TODO */
                 printf("Player at %s (port %d) likely lost the previous command\n", inet_ntoa(game->p2Address.sin_addr), game->p2Address.sin_port);
                 resend_command(sd, game);
