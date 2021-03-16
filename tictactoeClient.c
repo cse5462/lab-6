@@ -22,13 +22,14 @@
 #define NUM_ARGS 3
 
 /* C language requires that you predefine all the routines you are writing */
- struct buffer {
-       char version;
-       char move;
-       char place;
-       char gameNumber;
-        
-    };
+struct buffer
+{
+    char version;
+    char seqNum;
+    char command;
+    char data;
+    char gameNumber;
+};
 int checkwin(char board[ROWS][COLUMNS]);
 void print_board(char board[ROWS][COLUMNS]);
 int tictactoe();
@@ -36,14 +37,13 @@ int initSharedState(char board[ROWS][COLUMNS]);
 
 int main(int argc, char *argv[])
 {
-    struct buffer Buffer={0};
+    struct buffer Buffer = {0};
     char board[ROWS][COLUMNS];
     int sd;
     struct sockaddr_in server_address;
     int portNumber;
     char serverIP[29];
-    
-    
+
     // check for two arguments
     if (argc != 3)
     {
@@ -68,24 +68,25 @@ int main(int argc, char *argv[])
     server_address.sin_port = htons(portNumber);
     server_address.sin_addr.s_addr = inet_addr(serverIP);
     // connnect to the sever
-   
-    socklen_t fromLength=sizeof(struct sockaddr);
-    Buffer.version=3;
-    Buffer.move=0;
-    if(sendto(sd,&Buffer,sizeof(Buffer),0,(struct sockaddr*)&server_address,fromLength)<0)
+
+    socklen_t fromLength = sizeof(struct sockaddr);
+    Buffer.version = 4;
+    Buffer.command = 0;
+    Buffer.seqNum = 0;
+    if (sendto(sd, &Buffer, sizeof(Buffer), 0, (struct sockaddr *)&server_address, fromLength) < 0)
     {
         close(sd);
         perror("error    connecting    stream    socket");
         exit(1);
     }
-    
+
     printf("Connected to the server!\n");
-    initSharedState(board); // Initialize the 'game' board
-    tictactoe(board, sd,(struct sockaddr*)&server_address);   // call the 'game'
+    initSharedState(board);                                   // Initialize the 'game' board
+    tictactoe(board, sd, (struct sockaddr *)&server_address); // call the 'game'
     return 0;
 }
 
-int tictactoe(char board[ROWS][COLUMNS], int sd,struct sockaddr_in *serverAdd)
+int tictactoe(char board[ROWS][COLUMNS], int sd, struct sockaddr_in *serverAdd)
 {
     /* this is the meat of the game, you'll look here for how to change it up */
     int player = 1; // keep track of whose turn it is
@@ -94,59 +95,79 @@ int tictactoe(char board[ROWS][COLUMNS], int sd,struct sockaddr_in *serverAdd)
     char mark, pick; // either an 'x' or an 'o'
     int input;
     char gameNumber;
-    int x=0;
-   struct buffer player2,player1={0};
+    int x = 0;
+    struct buffer player2, player1 = {0};
     /* loop, first print the board, then ask player 'n' to make a move */
-
+    player2.seqNum = 0;
     do
     {
-         
-        socklen_t fromLength=sizeof(struct sockaddr);
+
+        socklen_t fromLength = sizeof(struct sockaddr);
         int choice;
         print_board(board);            // call function to print the board on the screen
         player = (player % 2) ? 1 : 2; // Mod math to figure out who the player is
         if (player == 2)
         {
             printf("Player %d, enter a number:  ", player); // player 2 picks a spot
-            scanf("%d", &input);    //using scanf to get the choice
-            while(getchar()!='\n');
-            while (input < 1 || input > 9)                  //makes sure the input is between 1-9
+            scanf("%d", &input);                            //using scanf to get the choice
+            while (getchar() != '\n')
+                ;
+            while (input < 1 || input > 9) //makes sure the input is between 1-9
             {
                 printf("Invalid input choose a number between 1-9.\n");
                 printf("Player %d, enter a number:  ", player); // player 2 picks a spot
-                
+
                 scanf("%d", &input);
-                while(getchar()!='\n');
+                while (getchar() != '\n')
+                    ;
             }
             pick = input + '0';
-            player2.version=3;
-            player2.move=1;
-            player2.place=pick;
-            player2.gameNumber=gameNumber;
+            player2.version = 4;
+            player2.seqNum++;
+            player2.command = 1;
+            player2.data = pick;
+            player2.gameNumber = gameNumber;
         }
         else
         {
-            
+
             printf("Waiting for square selection from player 1..\n"); // gets chosen spot from player 1
             struct timeval time;
-            time.tv_sec = 20;
+            time.tv_sec = 30;
             time.tv_usec = 0;
 
-    if (setsockopt(sd, SOL_SOCKET, SO_RCVTIMEO, &time, sizeof(time)) < 0) {
-        printf("Error with setSocketopt\n");
-        printf("Closing connection!\n");
-        exit(1);
-    }
-            rc =recvfrom(sd,&player1,sizeof(player1),0,(struct sockaddr *)serverAdd,&fromLength);
-            pick=player1.place;
-            if(x==0){
-            gameNumber=player1.gameNumber;
-            x++;
+            if (setsockopt(sd, SOL_SOCKET, SO_RCVTIMEO, &time, sizeof(time)) < 0)
+            {
+                printf("Error with setSocketopt\n");
+                printf("Closing connection!\n");
+                exit(1);
             }
+            rc = recvfrom(sd, &player1, sizeof(player1), 0, (struct sockaddr *)serverAdd, &fromLength);
+            pick = player1.data;
+            if (x == 0)
+            {
+                gameNumber = player1.gameNumber;
+                x++;
+            }
+            printf("Player2 SeqNum: %d Player1 SeqNum: %d \n", player2.seqNum, player1.seqNum);
+            if (player1.seqNum == player2.seqNum - 1)
+            {
+                printf("Datagram recived was 1 behind...\n");
+                printf("Resending last Datagram...\n");
+                rc = sendto(sd, &player2, sizeof(player2), 0, (struct sockaddr *)serverAdd, fromLength);
+                continue;
+            }
+            player2.seqNum = player1.seqNum;
+            // if(player1.seqNum==player2.seqNum-1){
+            //  printf("Data is 1 behind... Resending last message\n");
+            // rc=sendto(sd,&player2,sizeof(player2),0,(struct sockaddr *)serverAdd,fromLength);
+            // continue;
+            //                  }
             // checks to see if the connection was cut mid stream
             if (rc <= 0)
             {
-                if( (errno == EAGAIN || errno == EWOULDBLOCK) ){
+                if ((errno == EAGAIN || errno == EWOULDBLOCK))
+                {
                     printf("Error: Player ran out of time to respond\n");
                     printf("Closing connection!\n");
                     exit(1);
@@ -155,7 +176,8 @@ int tictactoe(char board[ROWS][COLUMNS], int sd,struct sockaddr_in *serverAdd)
                 printf("Closing connection!\n");
                 exit(1);
             }
-            if(player1.move==0|| player1.version!=3|| gameNumber!=player1.gameNumber){
+            if (player1.command == 0 || player1.version != 4 || gameNumber != player1.gameNumber)
+            {
                 printf("Player 1 sent invalid datagram\n");
                 printf("Closing connection!\n");
                 exit(1);
@@ -188,12 +210,16 @@ int tictactoe(char board[ROWS][COLUMNS], int sd,struct sockaddr_in *serverAdd)
             // sends player 2 chioce if it is valid on the board
             if (player == 2)
             {
-                printf("version: %d, move %d, place %c, sd %d\n",player2.version,player2.move,player2.place,sd);
-
-                rc=sendto(sd,&player2,sizeof(player2),0,(struct sockaddr *)serverAdd,fromLength);
-                if (rc<0 )
+                printf("version: %d, move %d, place %c, sd %d\n", player2.version, player2.command, player2.data, sd);
+                i = checkwin(board);
+                if (i != -1)
                 {
-                    printf("%d\n",rc);
+                    player2.command = 2;
+                }
+                rc = sendto(sd, &player2, sizeof(player2), 0, (struct sockaddr *)serverAdd, fromLength);
+                if (rc < 0)
+                {
+                    printf("%d\n", rc);
                     printf("Connection lost!\n");
                     printf("Closing connection!\n");
                     printf("Bye\n");
@@ -214,6 +240,7 @@ int tictactoe(char board[ROWS][COLUMNS], int sd,struct sockaddr_in *serverAdd)
             {
                 printf("The spot picked is not empty\n");
                 printf("Pick a new number\n");
+                player2.seqNum--;
                 continue;
             }
             player--;
@@ -221,7 +248,56 @@ int tictactoe(char board[ROWS][COLUMNS], int sd,struct sockaddr_in *serverAdd)
         }
         /* after a move, check to see if someone won! (or if there is a draw */
         i = checkwin(board);
+        if (i != -1)
+        {
+            if (player == 1)
+            {
+                printf("Player 1 has signaled that the game has ended...\n");
+                printf("Player 2 responding that it has got GAME_OVER from player 1...\n");
+                player2.seqNum++;
+                player2.command = 2;
+                rc = sendto(sd, &player2, sizeof(player2), 0, (struct sockaddr *)serverAdd, fromLength);
+                if (rc < 0)
+                {
+                    printf("%d\n", rc);
+                    printf("Connection lost!\n");
+                    printf("Closing connection!\n");
+                    printf("Bye\n");
+                    exit(1);
+                }
+            }
+            else
+            {
+                printf("Waiting for player 1 to issue a GAME_OVER command...\n");
+                struct timeval time;
+                time.tv_sec = 60;
+                time.tv_usec = 0;
 
+                if (setsockopt(sd, SOL_SOCKET, SO_RCVTIMEO, &time, sizeof(time)) < 0)
+                {
+                    printf("Error with setSocketopt\n");
+                    printf("Closing connection!\n");
+                    exit(1);
+                }
+                rc = recvfrom(sd, &player1, sizeof(player1), 0, (struct sockaddr *)serverAdd, &fromLength);
+                if (player1.command == 2)
+                {
+                    printf("GAME_OVER Command recevied!\n");
+                }
+                if (rc <= 0)
+                {
+                    if ((errno == EAGAIN || errno == EWOULDBLOCK))
+                    {
+                        printf("Error: Player ran out of time to respond\n");
+                        printf("Closing connection!\n");
+                        exit(1);
+                    }
+                    printf("Connection lost!\n");
+                    printf("Closing connection!\n");
+                    exit(1);
+                }
+            }
+        }
         player++;
         // memset(pick, 0, 1);
 
@@ -233,7 +309,7 @@ int tictactoe(char board[ROWS][COLUMNS], int sd,struct sockaddr_in *serverAdd)
     if (i == 1) // means a player won!! congratulate them
         printf("==>\aPlayer %d wins\n ", --player);
     else
-        printf("==>\aGame draw"); // ran out of squares, it is a draw
+        printf("==>\aGame draw\n"); // ran out of squares, it is a draw
 
     return 0;
 }
