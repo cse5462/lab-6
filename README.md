@@ -79,6 +79,8 @@ The specific tasks the client performs are as
 follows:
 - Create server socket from user provided IP/port
 - Perform datagram transfer over the connection
+- Handle duplicate datagrams
+- Handle lost datagrams
 - Terminate the connection to the server
 
 ### USAGE <a name="usage-client"></a>
@@ -97,4 +99,5 @@ arguments will need to be enclosed in quotes.
 - Player 1 is the "server": they are the one who calls bind()   
 - Player 1 goes first
 - On any errors, close the connection 
+- Timeout Time 30s
 - It is assumed that the IP addresses 0.0.0.0 and 255.255.255.255 are invalid remote server addresses to connect to as they are reserved values.
