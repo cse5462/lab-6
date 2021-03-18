@@ -1,9 +1,9 @@
 # TicTacToe Server (Player 1) Design
-> This is the design document for the TicTacToe Server ([tictactoeServer.c](https://github.com/CSE-5462-Spring-2021/assignment5-conner-ben/blob/main/tictactoeServer.c)).  
+> This is the design document for the TicTacToe Server ([tictactoeServer.c](https://github.com/CSE-5462-Spring-2021/assignment-6-conner-ben/blob/main/tictactoeServer.c)).  
 > By: Conner Graham
 
 ## Table of Contents
-- TicTacToe Class Protocol - [Protocol Document](https://docs.google.com/document/d/1wq3D-pyuyNu0O_81yzq8HaUqDNXmpJbGD7M6_t26xgg/edit?usp=sharing)
+- TicTacToe Class Protocol - [Protocol Document](https://docs.google.com/document/d/1H9yrRi0or_yTt-0xs5QAp2C6umw2qWW1FDL3EyVwF5g/edit?usp=sharing)
 - [Environment Constants](#environment-constants)
 - [Defined Structures](#defined-structures)
 - [High-Level Architecture](#high-level-architecture)
@@ -11,7 +11,7 @@
 
 ## Environment Constants
 ```C#
-VERSION = 3         // protocol version number
+VERSION = 4         // protocol version number
 
 NUM_ARGS = 2        // number of command line arguments
 TIMEOUT = TBD       // number of seconds spent waiting before a timeout
