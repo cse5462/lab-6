@@ -125,7 +125,7 @@ void tictactoe(params...) {
             /* update timeout clock for each ongoing game */
             /* check if any games are currently being played */
             /* iterate through all ongoing games */
-            if (game isn't over) {
+            if (/* game isn't over */) {
                 resend_command(params...);
             } else if (game in waiting state timed out) {
                 /* reset game */
@@ -209,7 +209,7 @@ void tictactoe(params...) {
 - Determines whether or not the given sequence number is valid based on the current state of the game.
     ```C
     int validate_sequence_num(params...) {
-        if (no game found or player address doesn't match) return (positive value);
+        if (/* no game found or player address doesn't match */) return (positive value);
         if (SN > game.SN) return ERROR_CODE;    // invalid sequence number
         if (SN = game.SN-1) return 0;           // duplicate sequence number
         if (SN < game.SN-1) return (code for already processed);
