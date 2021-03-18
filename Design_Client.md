@@ -22,19 +22,19 @@ At a high level, the client application takes in input from the user and trys to
 ```C
 int main(int argc, char *argv[])
 {
-    struct buffer Buffer={0};
+    struct buffer Buffer = {0};
     char board[ROWS][COLUMNS];
     int sd;
     struct sockaddr_in server_address;
+    struct sockaddr_in troll;
     int portNumber;
     char serverIP[29];
-    
-    
+
     // check for two arguments
     if (argc != 3)
     {
         printf("Wrong number of command line arguments");
-        printf("Input is as follows: tictactoeP2 <ip-address> <port-num>");
+        printf("Input is as follows: tictactoeP2 <port-num> <ip-address>");
         exit(1);
     }
     // create the socket
@@ -48,26 +48,37 @@ int main(int argc, char *argv[])
     {
         printf("Socket Created\n");
     }
-    portNumber = strtol(argv[2], NULL, 10);
-    strcpy(serverIP, argv[1]);
+
+    portNumber = strtol(argv[1], NULL, 10);
+    strcpy(serverIP, argv[2]);
     server_address.sin_family = AF_INET;
     server_address.sin_port = htons(portNumber);
     server_address.sin_addr.s_addr = inet_addr(serverIP);
+
+    troll.sin_family = AF_INET;
+    troll.sin_port = htons(4444);
+    troll.sin_addr.s_addr = INADDR_ANY;
+    if (bind(sd, (struct sockaddr *)&troll, sizeof(troll)) < 0)
+    {
+        printf("ERROR WITH SOCKET\n");
+        exit(1);
+    }
+
     // connnect to the sever
-   
-    socklen_t fromLength=sizeof(struct sockaddr);
-    Buffer.version=2;
-    Buffer.move=0;
-    if(sendto(sd,&Buffer,sizeof(Buffer),0,(struct sockaddr*)&server_address,fromLength)<0)
+    socklen_t fromLength = sizeof(struct sockaddr);
+    Buffer.version = 4;
+    Buffer.command = 0;
+    Buffer.seqNum = 0;
+    if (sendto(sd, &Buffer, sizeof(Buffer), 0, (struct sockaddr *)&server_address, fromLength) < 0)
     {
         close(sd);
         perror("error    connecting    stream    socket");
         exit(1);
     }
-    
+
     printf("Connected to the server!\n");
-    initSharedState(board); // Initialize the 'game' board
-    tictactoe(board, sd,(struct sockaddr*)&server_address);   // call the 'game'
+    initSharedState(board);                                   // Initialize the 'game' board
+    tictactoe(board, sd, (struct sockaddr *)&server_address); // call the 'game'
     return 0;
 }
 ```
