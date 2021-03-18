@@ -84,53 +84,148 @@ int main(int argc, char *argv[])
 ```
 
 ## Low-Level Architecture
-- Gets either player 1 choice or player 2's choice and makes sure the input is valid.
+- Client wins and waits for GAME_OVER COMMAND
 ```C
- do
-    {
-         
-        socklen_t fromLength=sizeof(struct sockaddr);
-        int choice;
-        print_board(board);            // call function to print the board on the screen
-        player = (player % 2) ? 1 : 2; // Mod math to figure out who the player is
-        if (player == 2)
-        {
-            printf("Player %d, enter a number:  ", player); // player 2 picks a spot
-            scanf("%d", &input);    //using scanf to get the choice
-            while(getchar()!='\n');
-            while (input < 1 || input > 9)                  //makes sure the input is between 1-9
-            {
-                printf("Invalid input choose a number between 1-9.\n");
-                printf("Player %d, enter a number:  ", player); // player 2 picks a spot
-                
-                scanf("%d", &input);
-                while(getchar()!='\n');
+int c = 0;
+                int gameover = 0;
+                // Waits for a GAME_OVER datagram from Player 1 
+                for (c = 0; c < 4 && gameover == 0; c++)
+                {
+                    printf("Waiting for player 1 to issue a GAME_OVER command...\n");
+                    set_timeout(sd, 30);   // sets timeout
+                    rc = recvfrom(sd, &player1, sizeof(player1), 0, (struct sockaddr *)serverAdd, &fromLength); 
+                    printf("Player 1 version: %d , SeqNum: %d , Command: %d , Data: %c GameNumber %d \n", player1.version, player1.seqNum, player1.command, player1.data, player1.gameNumber);
+                   
+                    if (rc <= 0)
+                    {
+                        // checks if there was a timeout
+                        if ((errno == EAGAIN || errno == EWOULDBLOCK))
+                        {
+                            if (c != 3)
+                            {
+                                printf("ERROR: TIMEOUT #%d\n", c);
+                                printf("Client hasnt gotten a move back from the sever in a while...\n");
+                                printf("Resending recent datagram..\n");
+                                printf("Resend Version: %d , SeqNumber %d , Command %d, Data %c\n", player2.version, player2.seqNum, player2.command, player2.data);
+                                rc = sendto(sd, &player2, sizeof(player2), 0, (struct sockaddr *)serverAdd, fromLength);
+                                continue;
+                            }
+                            else
+                            {
+                                printf("Error: Player ran out of time to respond\n");
+                                printf("Closing connection!\n");
+                                exit(1);
+                            }
+                        }
+                        printf("Connection lost!\n");
+                        printf("Closing connection!\n");
+                        exit(1);
+                    }
+                    else if (player1.command == 1)
+                    {
+                        printf("ERROR: DIDNT GET GAME_OVER RESENDING BEFORE GAME OVER\n");
+                        printf("Resend Version: %d , SeqNumber %d , Command %d, Data %c\n", player2.version, player2.seqNum, player2.command, player2.data);
+                        rc = sendto(sd, &player2, sizeof(player2), 0, (struct sockaddr *)serverAdd, fromLength);
+                    }
+                    else if (player1.command == 2)
+                    {
+                        printf("GAME_OVER Command recevied!\n");
+                        gameover = 1;
+                    }
+                }
             }
-            pick = input + '0';
-            player2.version=2;
-            player2.move=1;
-            player2.place=pick;
-        }
-        else
-        {
-            
-            printf("Waiting for square selection from player 1..\n"); // gets chosen spot from player 1
-            struct timeval time;
-            time.tv_sec = 20;
-            time.tv_usec = 0;
 
-    if (setsockopt(sd, SOL_SOCKET, SO_RCVTIMEO, &time, sizeof(time)) < 0) {
-        printf("Error with setSocketopt\n");
-        printf("Closing connection!\n");
-        exit(1);
-    }
-            rc =recvfrom(sd,&player1,sizeof(player1),0,(struct sockaddr *)serverAdd,&fromLength);
-            pick=player1.place;
-            
+```
+- Server wins and waits for a GAME_OVER COMMAND from the client
+```C
+ printf("Player 1 has signaled that the game has ended...\n");
+                printf("Player 2 responding that it has got GAME_OVER from player 1...\n");
+                player2.seqNum++;
+                player2.command = 2;
+                int b = 0;
+                int gameover = 0;
+                // sends GAME_OVER command and resends the GAME_OVER command if needed
+                for (b = 0; b != 3 && gameover == 0; b++)
+                {
+                    printf("GameOverSend Version: %d , SeqNumber %d , Command %d, Data %c\n", player2.version, player2.seqNum, player2.command, player2.data);
+                    rc = sendto(sd, &player2, sizeof(player2), 0, (struct sockaddr *)serverAdd, fromLength);
+                    if (rc < 0)
+                    {
+                        printf("%d\n", rc);
+                        printf("Connection lost!\n");
+                        printf("Closing connection!\n");
+                        printf("Bye\n");
+                        exit(1);
+                    }
+                    set_timeout(sd, 60);
+                    rc = recvfrom(sd, &player1, sizeof(player1), 0, (struct sockaddr *)serverAdd, &fromLength);
+                    if (rc <= 0)
+                    {
+                        if ((errno == EAGAIN || errno == EWOULDBLOCK))
+                        {
+                            printf("Player 2 assuming that Player 1 got the GAME_OVER Command because of the no response\n");
+                            gameover = 1;
+                            continue;
+                        }
+                        
+                        printf("Connection lost!\n");
+                        printf("Closing connection!\n");
+                        exit(1);
+                    }
+                    else if (player1.seqNum + 1 == player2.seqNum)
+                        {
+                            printf("Error: Player 1 didn't get GAME_OVER COMMAND\n");
+                            printf("Resending GAMEOVER COMMAND\n");
+                            continue;
+                        }
+
+```
+- Client checks for duplicate datagrams and resends. Also timesout if needed and resends the datagram
+```C
+ printf("Waiting for square selection from player 1..\n"); // gets chosen spot from player 1
+            rc = recvfrom(sd, &player1, sizeof(player1), 0, (struct sockaddr *)serverAdd, &fromLength);
+            pick = player1.data;
+            if (gameNumber == 0)
+            {
+                gameNumber = player1.gameNumber;
+            }
+            printf("Player1SeqNum: %d Player2seqNum: %d\n", player1.seqNum, player2.seqNum);
+
+            /*  if (player1.seqNum == player2.seqNum &&player1.seqNum!=0)
+            {
+                printf("Datagram recived was 1 behind...\n");
+                printf("Resending last Datagram...\n");
+                rc = sendto(sd, &player2, sizeof(player2), 0, (struct sockaddr *)serverAdd, fromLength);
+                 continue;
+                }
+                */
+
             // checks to see if the connection was cut mid stream
             if (rc <= 0)
             {
-                if( (errno == EAGAIN || errno == EWOULDBLOCK) ){
+                // checks for a timeout
+                if ((errno == EAGAIN || errno == EWOULDBLOCK))
+                {
+                    if (timeout != 3)
+                    {
+                        // if timed out it resends the previous datagram
+                        WrongSeq = 0;
+                        printf("ERROR: TIMEOUT #%d\n", timeout);
+                        printf("Client hasnt gotten a move back from the sever in a while...\n");
+                        printf("Resending recent datagram..\n");
+                        if (player1.seqNum == 0)
+                        {
+                            player2.version = 4;
+                            player2.command = 0;
+                            player2.seqNum = 0;
+                        }
+
+                        printf("Resend Version: %d , SeqNumber %d , Command %d, Data %c\n", player2.version, player2.seqNum, player2.command, player2.data);
+                        rc = sendto(sd, &player2, sizeof(player2), 0, (struct sockaddr *)serverAdd, fromLength);
+
+                        timeout++;
+                        continue;
+                    }
                     printf("Error: Player ran out of time to respond\n");
                     printf("Closing connection!\n");
                     exit(1);
@@ -139,77 +234,27 @@ int main(int argc, char *argv[])
                 printf("Closing connection!\n");
                 exit(1);
             }
-            if(player1.move==0|| player1.version!=2){
+            // checks to see if a duplicate datagram is recevied 
+            // resends previous datagram
+            if (player1.seqNum != player2.seqNum + 1 && player1.seqNum != 0)
+            {
+                printf("Expected Sequence number is wrong...\n");
+                printf("Looking for next sequcence number...\n");
+                printf("Resend Version: %d , SeqNumber %d , Command %d, Data %c\n", player2.version, player2.seqNum, player2.command, player2.data);
+                rc = sendto(sd, &player2, sizeof(player2), 0, (struct sockaddr *)serverAdd, fromLength);
+                WrongSeq = 1;
+                continue;
+            }
+            WrongSeq = 0;
+            player2.seqNum = player1.seqNum;
+            // checks for invalid datagram
+            printf("Player version: %d , SeqNum: %d , Command: %d , Data: %c GameNumber %d \n", player1.version, player1.seqNum, player1.command, player1.data, player1.gameNumber);
+            printf("gameNumber: %d \n", gameNumber);
+            if (player1.command == 0 || player1.version != 4 || gameNumber != player1.gameNumber)
+            {
                 printf("Player 1 sent invalid datagram\n");
                 printf("Closing connection!\n");
                 exit(1);
             }
         }
-        choice = pick - '0'; // converts to a int
-        if (player == 1)     // prints choices
-        {
-            printf("Player 1 picked: %d\n", choice);
-        }
-        else
-        {
-            printf("Player 2 picked: %d\n", choice);
-        }
-        mark = (player == 1) ? 'X' : 'O'; //depending on who the player is, either us x or o
-        /******************************************************************/
-        /** little math here. you know the squares are numbered 1-9, but  */
-        /* the program is using 3 rows and 3 columns. We have to do some  */
-        /* simple math to conver a 1-9 to the right row/column            */
-        /******************************************************************/
-        row = (int)((choice - 1) / ROWS);
-        column = (choice - 1) % COLUMNS;
-
-        /* first check to see if the row/column chosen is has a digit in it, if it */
-        /* square 8 has and '8' then it is a valid choice                          */
-
-        if (board[row][column] == (choice + '0'))
-        {
-            board[row][column] = mark;
-            // sends player 2 chioce if it is valid on the board
-            if (player == 2)
-            {
-                printf("version: %d, move %d, place %c, sd %d\n",player2.version,player2.move,player2.place,sd);
-
-                rc=sendto(sd,&player2,sizeof(player2),0,(struct sockaddr *)serverAdd,fromLength);
-                if (rc<0 )
-                {
-                    printf("%d\n",rc);
-                    printf("Connection lost!\n");
-                    printf("Closing connection!\n");
-                    printf("Bye\n");
-                    exit(1);
-                }
-            }
-        }
-        else
-        {
-            printf("Invalid move\n");
-            if (player == 1)
-            {
-                printf("The spot picked is not empty\n");
-                printf("Closing the game & connection\n");
-                exit(1);
-            }
-            else if (player == 2)
-            {
-                printf("The spot picked is not empty\n");
-                printf("Pick a new number\n");
-                continue;
-            }
-            player--;
-            getchar();
-        }
-        /* after a move, check to see if someone won! (or if there is a draw */
-        i = checkwin(board);
-
-        player++;
-        // memset(pick, 0, 1);
-
-    } while (i == -1); // -1 means no one won
-
 ```
-
