@@ -16,7 +16,7 @@
   - [Assumptions](#assumptions-client)
 
 ## Included Files
-- [makefile](https://github.com/CSE-5462-Spring-2021/assignment-6-conner-ben/blob/main/tictactoeServer.c)
+- [makefile](https://github.com/CSE-5462-Spring-2021/assignment-6-conner-ben/blob/main/makefile)
 - Server (Player 1) Design Document - [Design_Server.md](https://github.com/CSE-5462-Spring-2021/assignment-6-conner-ben/blob/main/Design_Server.md)
 - TicTacToe Server Source Code - [tictactoeServer.c](https://github.com/CSE-5462-Spring-2021/assignment-6-conner-ben/blob/main/tictactoeServer.c)
 - Client (Player 2) Design Document - [Design_Client.md](https://github.com/CSE-5462-Spring-2021/assignment-6-conner-ben/blob/main/Design_Client.md)
