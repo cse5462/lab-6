@@ -5,35 +5,41 @@
 ## Table of Contents
 - TicTacToe Class Protocol - [Protocol Document](https://docs.google.com/document/d/1H9yrRi0or_yTt-0xs5QAp2C6umw2qWW1FDL3EyVwF5g/edit?usp=sharing)
 - [Environment Constants](#environment-constants)
-- [Defined Structures](#defined-structures)
+- [Environment Structures](#environment-structures)
 - [High-Level Architecture](#high-level-architecture)
 - [Low-Level Architecturet](#low-level-architecture)
 
 ## Environment Constants
 ```C#
-VERSION = 4         // protocol version number
+VERSION = 4             // protocol version number
 
-NUM_ARGS = 2        // number of command line arguments
-TIMEOUT = TBD       // number of seconds spent waiting before a timeout
-ROWS = 3            // number of rows for the TicIacToe board
-COLUMNS = 3         // number of columns for the TicIacToe board
-MAX_GAMES = TBD     // maximum number of games that can be played simultaneously
-P1_MARK = TBD       // baord marker used for Player 1
-P2_MARK = TBD       // baord marker used for Player 2
+NUM_ARGS = 2            // number of command line arguments
+GAME_TIMEOUT = 30       // number of seconds spent waiting before a timeout
+SERVER_TIMEOUT = TBD    // number of seconds spent waiting before a timeout
+MAX_RESENDS = TBD       // maximum number of resend attempts before resetting a game
+ROWS = 3                // number of rows for the TicIacToe board
+COLUMNS = 3             // number of columns for the TicIacToe board
+MAX_GAMES = TBD         // maximum number of games that can be played simultaneously
+P1_MARK = TBD           // baord marker used for Player 1
+P2_MARK = TBD           // baord marker used for Player 2
 
 // COMMANDS
-NEW_GAME = 0x00     // command to begin a new game
-MOVE = 0x01         // command to issue a move
+NEW_GAME = 0x00         // command to begin a new game
+MOVE = 0x01             // command to issue a move
+GAME_OVER = 0x02        // command to end a game
 ```
 
-## Defined Structures
+## Environment Structures
 Structure for each TicTacToe game.
 ```C
 struct TTT_Game {
     int gameNum;                    // game number
+    int seqNum;                     // sequence number game currently on
     double timeout;                 // amount of time before game timeout
+    int resends;                    // number of resends before quitting game
     struct sockaddr_in p2Address;   // address of remote player for game
-    int player;                     // current player's turn
+    int winner;                     // player who won, 0 if draw, -1 if game ongoing
+    struct Buffer lastSent;         // previous command sent in game
     char board[ROWS*COLUMNS];       // TicTacToe game board state
 };
 ```
@@ -41,6 +47,7 @@ Structure to send and recieve player datagrams.
 ```C
 struct Buffer {
     char version;   // version number
+    char seqNum;    // sequence number
     char command;   // player command
     char data;      // data for command if applicable
     char gameNum;   // game number
