@@ -1,8 +1,8 @@
 # TicTacToe Program – MultiPlayer
-> This is the README file for [Lab_5](https://osu.instructure.com/courses/97443/files/27903209/download?download_frd=1)
+> This is the README file for [Lab_6](https://osu.instructure.com/courses/97443/files/27903200/download?download_frd=1)
 
 **NAME:** Conner Graham, Ben Nagel  
-**DATE:** 03/04/2021
+**DATE:** 03/18/2021
 
 ## Table of Contents:
 - [Included Files](#included-files)
@@ -16,11 +16,11 @@
   - [Assumptions](#assumptions-client)
 
 ## Included Files
-- [makefile](https://github.com/CSE-5462-Spring-2021/assignment5-conner-ben/blob/main/makefile)
-- Server (Player 1) Design Document - [Design_Server.md](https://github.com/CSE-5462-Spring-2021/assignment5-conner-ben/blob/main/Design_Server.md)
-- TicTacToe Server Source Code - [tictactoeServer.c](https://github.com/CSE-5462-Spring-2021/assignment5-conner-ben/blob/main/tictactoeServer.c)
-- Client (Player 2) Design Document - [Design_Client.md](https://github.com/CSE-5462-Spring-2021/assignment5-conner-ben/blob/main/Design_Client.md)
-- TicTacToe Client Source Code - [tictactoeClient.c](https://github.com/CSE-5462-Spring-2021/assignment5-conner-ben/blob/main/tictactoeClient.c)
+- [makefile](https://github.com/CSE-5462-Spring-2021/assignment-6-conner-ben/blob/main/tictactoeServer.c)
+- Server (Player 1) Design Document - [Design_Server.md](https://github.com/CSE-5462-Spring-2021/assignment-6-conner-ben/blob/main/Design_Server.md)
+- TicTacToe Server Source Code - [tictactoeServer.c](https://github.com/CSE-5462-Spring-2021/assignment-6-conner-ben/blob/main/tictactoeServer.c)
+- Client (Player 2) Design Document - [Design_Client.md](https://github.com/CSE-5462-Spring-2021/assignment-6-conner-ben/blob/main/Design_Client.md)
+- TicTacToe Client Source Code - [tictactoeClient.c](https://github.com/CSE-5462-Spring-2021/assignment-6-conner-ben/blob/main/tictactoeClient.c)
 
 ## TicTacToe Server
 > By: Conner Graham
@@ -30,21 +30,23 @@ This lab contains a program called "tictactoeServer" which sets up
 multiple net-enabled TicTacToe games that clients can play simultaneously.
 This server sets up a communication endpoint for other players to communicate
 with, initializes a set of game boards, and processes any commands received
-from other players. These commands can include initialize a game of TicTacToe
-when a player requests one or responding to other player's moves until a
-winner is found or the game is a draw. If a player takes too long to respond,
-the game times out and is reset for another player to play. If no player
-responds to the server for a period of time, the server times out and all
-ongoing games are reset for other players to play. The specific tasks the
-server performs are as follows:
+from other players. These commands can include initializing a game of TicTacToe
+when a player requests one, responding to other player's moves until a
+winner is found or the game is a draw, or ending a game of TicTacToe when a player
+requests to. If a player takes too long to respond, the game times out and either
+the previous command is resent or the game is reset for another player to play.
+If no player responds to the server for a period of time, the server times out and
+either the previous command is resent for each ongoing game or the game is reset
+for another player to play.
+The specific tasks the server performs are as follows:
 - Create and bind server socket from user provided port
 - Print server info and listen for commands
 - Initialize all game boards
 - Set server timeout time
 - Accept UDP DGRAM command from waiting client
 - Process the command for the corresponding game
-- Reset ongoing games that have timed out
-- Reset all games if server has timed out
+- Resend commands (or end) for ongoing games that have timed out
+- Resend commands (or end) for ongoing games if server has timed out
 
 If the number of arguments is incorrect or the remote port is
 invalid, the program prints appropriate messages and shows how to
@@ -68,6 +70,10 @@ arguments will need to be enclosed in quotes.
 - It is assumed that the player making the "New Game" request will
   always send their messages from the same IP address and port number
   used to make the request.
+- It is assumed that messages with a sequence number that has already
+  been processed will be ingnored.
+- It is assumed that messages with a sequence number above the current
+  number are an error and the game will be reset.
 
 ## TicTacToe Client
 > By: Ben Nagel
