@@ -110,7 +110,7 @@ int tictactoe(char board[ROWS][COLUMNS], int sd, struct sockaddr_in *serverAdd)
     struct buffer player2, player1 = {0};
     /* loop, first print the board, then ask player 'n' to make a move */
     player2.seqNum = 0;
-    int WrongSeq=0;
+    int WrongSeq = 0;
     int timeout = 0;
     do
     {
@@ -127,8 +127,9 @@ int tictactoe(char board[ROWS][COLUMNS], int sd, struct sockaddr_in *serverAdd)
         }
         else
         {
-            if(WrongSeq==0){
-            set_timeout(sd, 30);
+            if (WrongSeq == 0)
+            {
+                set_timeout(sd, 30);
             }
             printf("Waiting for square selection from player 1..\n"); // gets chosen spot from player 1
             rc = recvfrom(sd, &player1, sizeof(player1), 0, (struct sockaddr *)serverAdd, &fromLength);
@@ -155,7 +156,7 @@ int tictactoe(char board[ROWS][COLUMNS], int sd, struct sockaddr_in *serverAdd)
                 {
                     if (timeout != 3)
                     {
-                        WrongSeq=0;
+                        WrongSeq = 0;
                         printf("ERROR: TIMEOUT #%d\n", timeout);
                         printf("Client hasnt gotten a move back from the sever in a while...\n");
                         printf("Resending recent datagram..\n");
@@ -186,10 +187,10 @@ int tictactoe(char board[ROWS][COLUMNS], int sd, struct sockaddr_in *serverAdd)
                 printf("Looking for next sequcence number...\n");
                 printf("Resend Version: %d , SeqNumber %d , Command %d, Data %c\n", player2.version, player2.seqNum, player2.command, player2.data);
                 rc = sendto(sd, &player2, sizeof(player2), 0, (struct sockaddr *)serverAdd, fromLength);
-                WrongSeq=1;
+                WrongSeq = 1;
                 continue;
             }
-            WrongSeq=0;
+            WrongSeq = 0;
             player2.seqNum = player1.seqNum;
             printf("Player version: %d , SeqNum: %d , Command: %d , Data: %c GameNumber %d \n", player1.version, player1.seqNum, player1.command, player1.data, player1.gameNumber);
             printf("gameNumber: %d \n", gameNumber);
@@ -290,24 +291,33 @@ int tictactoe(char board[ROWS][COLUMNS], int sd, struct sockaddr_in *serverAdd)
                     }
                     set_timeout(sd, 60);
                     rc = recvfrom(sd, &player1, sizeof(player1), 0, (struct sockaddr *)serverAdd, &fromLength);
-                    if ((errno == EAGAIN || errno == EWOULDBLOCK))
+                    if (rc <= 0)
                     {
-                        if (player1.seqNum+1 != player2.seqNum)
+                        if ((errno == EAGAIN || errno == EWOULDBLOCK))
+                        {
+                            printf("Player 2 assuming that Player 1 got the GAME_OVER Command because of the no response\n");
+                            gameover = 1;
+                            continue;
+                        }
+                        
+                        printf("Connection lost!\n");
+                        printf("Closing connection!\n");
+                        exit(1);
+                    }
+                    else if (player1.seqNum + 1 == player2.seqNum)
                         {
                             printf("Error: Player 1 didn't get GAME_OVER COMMAND\n");
                             printf("Resending GAMEOVER COMMAND\n");
-                        } else {
-                        printf("Player 2 has got the GAME_OVER request!\n");
-                        gameover = 1;
+                            continue;
                         }
-                    }
+
                 }
             }
             else
             {
                 int c = 0;
                 int gameover = 0;
-                for (c = 0; c < 5 && gameover == 0; c++)
+                for (c = 0; c < 4 && gameover == 0; c++)
                 {
                     printf("Waiting for player 1 to issue a GAME_OVER command...\n");
                     set_timeout(sd, 30);
@@ -318,7 +328,7 @@ int tictactoe(char board[ROWS][COLUMNS], int sd, struct sockaddr_in *serverAdd)
                     {
                         if ((errno == EAGAIN || errno == EWOULDBLOCK))
                         {
-                            if (c != 4)
+                            if (c != 3)
                             {
                                 printf("ERROR: TIMEOUT #%d\n", c);
                                 printf("Client hasnt gotten a move back from the sever in a while...\n");
@@ -337,7 +347,9 @@ int tictactoe(char board[ROWS][COLUMNS], int sd, struct sockaddr_in *serverAdd)
                         printf("Connection lost!\n");
                         printf("Closing connection!\n");
                         exit(1);
-                    } else if(player1.command==1) {
+                    }
+                    else if (player1.command == 1)
+                    {
                         printf("ERROR: DIDNT GET GAME_OVER RESENDING BEFORE GAME OVER\n");
                         printf("Resend Version: %d , SeqNumber %d , Command %d, Data %c\n", player2.version, player2.seqNum, player2.command, player2.data);
                         rc = sendto(sd, &player2, sizeof(player2), 0, (struct sockaddr *)serverAdd, fromLength);
