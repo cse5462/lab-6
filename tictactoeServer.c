@@ -100,7 +100,7 @@ int same_address(const struct sockaddr_in *addr1, const struct sockaddr_in *addr
 void init_shared_state(struct TTT_Game *game);
 void reset_game(struct TTT_Game *game);
 void init_game_roster(struct TTT_Game roster[MAX_GAMES]);
-int games_in_progress(int *numNotOver, struct TTT_Game roster[MAX_GAMES]);
+int games_in_progress(int *numWaiting, struct TTT_Game roster[MAX_GAMES]);
 int find_open_game(struct TTT_Game roster[MAX_GAMES]);
 int get_command(int sd, struct sockaddr_in *playerAddr, struct Buffer *datagram);
 int validate_sequence_num(const struct sockaddr_in *playerAddr, const struct Buffer *datagram, const struct TTT_Game *game);
