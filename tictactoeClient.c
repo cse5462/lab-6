@@ -152,10 +152,12 @@ int tictactoe(char board[ROWS][COLUMNS], int sd, struct sockaddr_in *serverAdd)
             // checks to see if the connection was cut mid stream
             if (rc <= 0)
             {
+                // checks for a timeout
                 if ((errno == EAGAIN || errno == EWOULDBLOCK))
                 {
                     if (timeout != 3)
                     {
+                        // if timed out it resends the previous datagram
                         WrongSeq = 0;
                         printf("ERROR: TIMEOUT #%d\n", timeout);
                         printf("Client hasnt gotten a move back from the sever in a while...\n");
@@ -181,6 +183,8 @@ int tictactoe(char board[ROWS][COLUMNS], int sd, struct sockaddr_in *serverAdd)
                 printf("Closing connection!\n");
                 exit(1);
             }
+            // checks to see if a duplicate datagram is recevied 
+            // resends previous datagram
             if (player1.seqNum != player2.seqNum + 1 && player1.seqNum != 0)
             {
                 printf("Expected Sequence number is wrong...\n");
@@ -192,6 +196,7 @@ int tictactoe(char board[ROWS][COLUMNS], int sd, struct sockaddr_in *serverAdd)
             }
             WrongSeq = 0;
             player2.seqNum = player1.seqNum;
+            // checks for invalid datagram
             printf("Player version: %d , SeqNum: %d , Command: %d , Data: %c GameNumber %d \n", player1.version, player1.seqNum, player1.command, player1.data, player1.gameNumber);
             printf("gameNumber: %d \n", gameNumber);
             if (player1.command == 0 || player1.version != 4 || gameNumber != player1.gameNumber)
@@ -270,13 +275,14 @@ int tictactoe(char board[ROWS][COLUMNS], int sd, struct sockaddr_in *serverAdd)
         {
             if (player == 1)
             {
-                //fix last send command
+                
                 printf("Player 1 has signaled that the game has ended...\n");
                 printf("Player 2 responding that it has got GAME_OVER from player 1...\n");
                 player2.seqNum++;
                 player2.command = 2;
                 int b = 0;
                 int gameover = 0;
+                // sends GAME_OVER command and resends the GAME_OVER command if needed
                 for (b = 0; b != 3 && gameover == 0; b++)
                 {
                     printf("GameOverSend Version: %d , SeqNumber %d , Command %d, Data %c\n", player2.version, player2.seqNum, player2.command, player2.data);
@@ -317,15 +323,17 @@ int tictactoe(char board[ROWS][COLUMNS], int sd, struct sockaddr_in *serverAdd)
             {
                 int c = 0;
                 int gameover = 0;
+                // Waits for a GAME_OVER datagram from Player 1 
                 for (c = 0; c < 4 && gameover == 0; c++)
                 {
                     printf("Waiting for player 1 to issue a GAME_OVER command...\n");
-                    set_timeout(sd, 30);
-                    rc = recvfrom(sd, &player1, sizeof(player1), 0, (struct sockaddr *)serverAdd, &fromLength);
+                    set_timeout(sd, 30);   // sets timeout
+                    rc = recvfrom(sd, &player1, sizeof(player1), 0, (struct sockaddr *)serverAdd, &fromLength); 
                     printf("Player 1 version: %d , SeqNum: %d , Command: %d , Data: %c GameNumber %d \n", player1.version, player1.seqNum, player1.command, player1.data, player1.gameNumber);
-                    // send back move
+                   
                     if (rc <= 0)
                     {
+                        // checks if there was a timeout
                         if ((errno == EAGAIN || errno == EWOULDBLOCK))
                         {
                             if (c != 3)
@@ -455,6 +463,7 @@ int initSharedState(char board[ROWS][COLUMNS])
 
     return 0;
 }
+/* Gets the player 2's choice */
 struct buffer P2choice(struct buffer player2)
 {
 
@@ -478,6 +487,7 @@ struct buffer P2choice(struct buffer player2)
     player2.data = input + '0';
     return player2;
 }
+/* Sets a timeout */
 void set_timeout(int sd, int second)
 {
     struct timeval time;
