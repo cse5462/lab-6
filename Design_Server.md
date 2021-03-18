@@ -97,26 +97,39 @@ int create_endpoint(params...) {
     return socket-descriptor;
 }
 ```
-Initializes a set of game boards and processes any commands receivedfrom other players. These
-commands can include initializing a game of TicTacToe when a player requests one or responding
-to other players moves until a winner is found or the game is a draw. If a player takes too
-long to respond, the game times out and is reset for another player to play. If no player
-responds to the server for a period of time, the server times out and all ongoing games are
-reset for other players to play.
+Initializes a set of game boards and processes any commands received from other players. These
+commands can include initializing a game of TicTacToe when a player requests one, responding
+to other players moves until a winner is found or the game is a draw, or ending a game of
+TicTacToe. If a player takes too long to respond, the game times out and either the previous
+command is resent or the game is reset. If no player responds to the server for a period of
+time,the server times out and either the previous command is resent or the game is reset for
+all ongoing games.
 ```C
 void tictactoe(params...) {
     /* initialize all games */
     /* set server timeout time */
     while (TRUE) {
+        /* start elapsed time clock */
         get_command(params...);
         if (!error) {
             /* retrieve appropriate game */
-            /* process command */
-            /* update timeout clock for each ongoing game */
-            /* reset any game that has timed out */
+            validate_sequence_number(params...);
+            if (valid) /* process command */;
+            if (duplicate) resend_command(params...);
+            if (invalid) /* reset game */;
+            /* stop elapsed time clock */
+            /* update timeout clock for each ongoing game and reset resends */
+            /* handle games that have timed out */
         } else if (error == timeout) {    // server timeout
+            /* stop elapsed time clock */
+            /* update timeout clock for each ongoing game */
             /* check if any games are currently being played */
-            if (games open) /* reset all games */;
+            /* iterate through all ongoing games */
+            if (game isn't over) {
+                resend_command(params...);
+            } else if (game in waiting state timed out) {
+                /* reset game */
+            }
         }
     }
 }
@@ -128,6 +141,8 @@ void tictactoe(params...) {
         /* receive command from remote player */
         if (error) return ERROR_CODE;
         /* check version number */
+        if (!valid) return ERROR_CODE;
+        /* check sequence number */
         if (!valid) return ERROR_CODE;
         /* check command */
         if (!valid) return ERROR_CODE;
@@ -141,6 +156,7 @@ void tictactoe(params...) {
         ```C
         void new_game(params...) {
             if (there is an open game) {
+                /* update game sequence number */
                 /* register player address to open game */
                 /* initialize the game board */
                 send_p1_move(params...);
@@ -149,7 +165,6 @@ void tictactoe(params...) {
                     return;
                 }
                 /* update and print game board */
-                /* change turn to other player */
             }
         }
         ```
@@ -162,27 +177,62 @@ void tictactoe(params...) {
             if (player address matches that assigned to game) {
                 /* check that move is valid */
                 if (valid) {
+                    /* update game sequence number */
                     /* update board with Player 2's move */
-                    if (game over) return;
+                    if (game over) {
+                        send_game_over(params...);
+                        return;
+                    }
                     send_p1_move(params...);
                     if (error) {
                         /* reset game */
                         return;
                     }
                     /* update board with Player 1's move */
-                    if (game over) return;
-                    /* print board after move exchange */
+                    if (game not over) print board after move exchange */
                 } else {
                     /* reset game */
                 }
             }
         }
         ```
+    - Handles the GAME_OVER command from the remote player. Resets the current game for new
+      players to begin playing.
+        ```C
+        void game_over(params...) {
+            /* get command from remote player */
+            if (player address matches that assigned to game) {
+                /* reset game */
+            }
+        }
+        ```
+- Determines whether or not the given sequence number is valid based on the current state of the game.
+    ```C
+    int validate_sequence_num(params...) {
+        if (no game found or player address doesn't match) return (positive value);
+        if (SN > game.SN) return ERROR_CODE;    // invalid sequence number
+        if (SN = game.SN-1) return 0;           // duplicate sequence number
+        if (SN < game.SN-1) return (code for already processed);
+    }
+    ```
+- Resends the previous command that was sent to the remote player.
+    ```C
+    void resend_command(params...) {
+        if (max resends not exceeded) {
+            /* pack last sent command info into datagram */
+            /* send command to remote player */
+            if (error) /* reset game */;
+        } else {
+            /* reset game */;
+        }
+    }
+    ```
 - Determines whether or not the given move is valid based on the current state of the game.
     ```C
     int validate_move(params...) {
         if (move not numer [1-9]) return FALSE;
         if (move has already been made) return FALSE;
+        if (game has already ended) return FALSE;
         return TRUE;
     }
     ```
@@ -193,20 +243,30 @@ void tictactoe(params...) {
         /* pack move info into datagram */
         /* send move to remote player */
         if (error) return ERROR_CODE;
+        /* update last sent command for game */
         return (move);
     }
     ```
-- Checks if the current game has ended, prints the appropriate message if so, and resets the
-  game for a new player.
+- Checks if the current game has ended and prints the appropriate message if so.
     ```C
-    int game_over(params...) {
+    int check_game_over(params...) {
         /* check if somebody won */
-        if (winner) /* print winner info */;
+        if (winner) /* set and print winner info */;
         /* check for draw */
-        if (draw) /* print draw info */;
+        if (draw) /* set and print draw info */;
         /* check if game still in progress */
         if (!winner && !draw) return FALSE;
-        /* reset game */
+        /* print final board state */
         return TRUE;
+    }
+    ```
+- Sends GAME_OVER command to the remote player and puts game in waiting state.
+    ```C
+    void send_game_over(params...) {
+        /* pack command info into datagram */
+        /* update last sent command for game */
+        /* update game timeout for grace period */
+        /* send command to remote player */
+        if (error) /* reset game */;
     }
     ```
