@@ -34,10 +34,10 @@
 #define ERROR_CODE -1
 /* The number of seconds spend waiting before a game times out. */
 #define GAME_TIMEOUT 30
-/* The number of TODO . */
+/* The number of resend attempts before quitting a game . */
 #define MAX_RESENDS 5
 /* The number of seconds spend waiting before the server times out. */
-#define SERVER_TIMEOUT (GAME_TIMEOUT/3.0)
+#define SERVER_TIMEOUT (GAME_TIMEOUT/2)
 
 /* The number of rows for the TicIacToe board. */
 #define ROWS 3
@@ -68,9 +68,9 @@ struct TTT_Game {
     int gameNum;                    // game number
     int seqNum;                     // sequence number the game is currently on
     double timeout;                 // amount of time before game timeout
-    int resends;                    // TODO
+    int resends;                    // max number of resend attempts before quitting game
     struct sockaddr_in p2Address;   // address of remote player for game
-    int winner;                     // TODO
+    int winner;                     // player who won, 0 if draw, -1 if game not over
     struct Buffer lastSent;         // the previous command that was sent in the game
     char board[ROWS*COLUMNS];       // TicTacToe game board state
 };
@@ -294,8 +294,9 @@ void set_timeout(int sd, int seconds) {
 }
 
 /**
- * @brief Checks each TicTacToe game to see if it has timed out or not. If one has, that game
- * is reset.
+ * @brief Checks each TicTacToe game to see if it has timed out or not. If one has, the previous
+ * command for that game is resent. If one has and the last command received was a GAME_OVER
+ * command, the game is reset.
  * 
  * @param sd The socket descriptor of the server comminication endpoint.
  * @param roster The array of playable TicTacToe games.
@@ -308,11 +309,13 @@ void check_timeout(int sd, struct TTT_Game roster[MAX_GAMES]) {
         /* Check if current game timeout has expired */
         if (game->timeout <= 0) {
             printf("[+]Game #%d has timed out.\n", game->gameNum);
+            /* Check if the server has sent GAME_OVER command and is waiting */
             if (game->lastSent.command != GAME_OVER) {
-                /* TODO */
+                /* Command likely got lost -> resend previously sent command */
                 printf("Player at %s (port %d) likely lost the previous command\n", inet_ntoa(game->p2Address.sin_addr), game->p2Address.sin_port);
                 resend_command(sd, game);
             } else {
+                /* Grace period over -> end game */
                 printf("Haven't heard back after sending GAME_OVER command\n");
                 reset_game(game);
             }
@@ -381,7 +384,7 @@ void init_game_roster(struct TTT_Game roster[MAX_GAMES]) {
         struct TTT_Game *game = &roster[i];
         /* Initialize current game attributes to default values */
         reset_game(game);
-        /* TODO */
+        /* Set current game number */
         game->gameNum = i+1;
     }
 }
@@ -389,6 +392,8 @@ void init_game_roster(struct TTT_Game roster[MAX_GAMES]) {
 /**
  * @brief Determines how many games are currently being played.
  * 
+ * @param numWaiting The number of game to return that are in progress, are finished, and are
+ * waiting to be reset.
  * @param roster The array of playable TicTacToe games.
  * @return The number of games currently being played. 
  */
@@ -400,7 +405,9 @@ int games_in_progress(int *numWaiting, struct TTT_Game roster[MAX_GAMES]) {
         struct TTT_Game *game = &roster[i];
         /* Check if current game still in default state or has been started */
         if (game->seqNum > 0) {
+            /* If game is in grace period after sending GAME_OVER, increment numWaiting */
             if (game->lastSent.command == GAME_OVER && game->timeout > 0) (*numWaiting)++;
+            /* Increment number of games in progress */
             count++;
         }
     }
@@ -483,7 +490,7 @@ void new_game(int sd, const struct sockaddr_in *playerAddr, const struct Buffer 
     printf("Player at %s (port %d) issued a NEW_GAME command\n", inet_ntoa(playerAddr->sin_addr), playerAddr->sin_port);
     /* Check that there was an open game to play */
     if (game != NULL) {
-        /* TODO */
+        /* Increment sequence number for next command to send to remote player */
         game->seqNum++;
         /* Register player address to game and initialize the board */
         game->p2Address = *playerAddr;
@@ -506,7 +513,8 @@ void new_game(int sd, const struct sockaddr_in *playerAddr, const struct Buffer 
 /**
  * @brief Handles the MOVE command from the remote player. Receives and processes a move
  * from the remote player and sends a move back. If the game has ended from a move, an
- * appropriate message is printed and the game is reset for a new player.
+ * appropriate message is printed. If the game ends from a move from the remote player,
+ * a GAME_OVER command is rent back in response.
  * 
  * @param sd The socket descriptor of the server comminication endpoint.
  * @param playerAddr The address of the remote player.
@@ -523,16 +531,18 @@ void move(int sd, const struct sockaddr_in *playerAddr, const struct Buffer *dat
         printf("Player 2 chose the move:  %c\n", datagram->data);
         /* Check that the received move is valid */
         if (validate_move(move, game)) {
-            /* TODO */
+            /* Increment sequence number for next command to send to remote player */
             game->seqNum++;
             /* Update the board (for Player 2) and check if someone won */
             game->board[move-1] = P2_MARK;
             if (check_game_over(game)) {
+                /* If Player 2 won, send GAME_OVER command */
                 send_game_over(sd, game);
                 return;
             }
             /* If nobody won, make a move to send to the remote player */
             if ((move = send_p1_move(sd, game)) == ERROR_CODE) {
+                /* Reset game if there was an error sending the move */
                 reset_game(game);    
                 return;
             }
@@ -549,7 +559,8 @@ void move(int sd, const struct sockaddr_in *playerAddr, const struct Buffer *dat
 }
 
 /**
- * @brief Handles the GAME_OVER command from the remote player. TODO
+ * @brief Handles the GAME_OVER command from the remote player. Determines the reason for
+ * ending the game, prints the appropriate message, and resets the game.
  * 
  * @param sd The socket descriptor of the server comminication endpoint.
  * @param playerAddr The address of the remote player.
@@ -562,12 +573,16 @@ void game_over(int sd, const struct sockaddr_in *playerAddr, const struct Buffer
     /* Check that the command came from the player registered to the game */
     if (same_address(playerAddr, &game->p2Address)) {
         printf("Player 2 has signaled that the game is over\n");
+        /* Check if the game is actually over */
         if (game->winner < 0) {
+            /* If not over, player decided to leave prematurely */
             print_error("game_over: Game is still in progress", 0, 0);
             printf("Player 2 has decided to leave the game\n");
         } else {
+            /* If over, print appropriate message for who won */
             (game->winner == 0) ? printf("==>\a It's a draw\n") : printf("==>\a Player %d wins\n", game->winner);
         }
+        /* Reset the game */
         reset_game(game);
     } else {
         print_error("move: Player address does not match that registered to game", 0, 0);
@@ -576,22 +591,25 @@ void game_over(int sd, const struct sockaddr_in *playerAddr, const struct Buffer
 }
 
 /**
- * @brief TODO
+ * @brief Checks the sequence number of the received datagram with the corresponding game to make sure
+ * that the sequence number is valid.
  * 
  * @param playerAddr The address of the remote player.
  * @param datagram The datagram containing the command that the remote player sends.
  * @param game The current game of TicTacToe being played.
- * @return TODO 
+ * @return A positive number if the sequence number for the current game is valid, 0 if it is a duplicate,
+ * an error code (-2) if it has already been processed, and an error code (-1) if it is invalid.
  */
 int validate_sequence_num(const struct sockaddr_in *playerAddr, const struct Buffer *datagram, const struct TTT_Game *game) {
+    /* Number is automatically valid if no open games to play of player address doesn't match address registered to game */
     if (game != NULL && same_address(playerAddr, &game->p2Address)) {
-        if (datagram->seqNum > game->seqNum) {
+        if (datagram->seqNum > game->seqNum) {  // received new sequence before previous one could be processed
             printf("Game #%d received an invalid sequence number\n", game->gameNum);
             return -1;
-        } else if (datagram->seqNum == game->seqNum-1) {
+        } else if (datagram->seqNum == game->seqNum-1) {    // received duplicate sequence
             printf("Game #%d received a duplicate command\n", game->gameNum);
             return 0;
-        } else if (datagram->seqNum < game->seqNum-1) {
+        } else if (datagram->seqNum < game->seqNum-1) {   // received sequence that has already been processed
             printf("Game #%d received a command that has already been processed\n", game->gameNum);
             return -2;
         } else {
@@ -603,22 +621,28 @@ int validate_sequence_num(const struct sockaddr_in *playerAddr, const struct Buf
 }
 
 /**
- * @brief TODO
+ * @brief Resends the previous command that was sent to the remote player.
  * 
  * @param sd The socket descriptor of the server comminication endpoint.
  * @param game The current game of TicTacToe being played.
  */
 void resend_command(int sd, struct TTT_Game *game) {
-    /* TODO */
+    /* Checks that max resends has not been exceeded and decrements count */
     if (game->resends-- > 0) {
+        /* Pack last sent command into a datagram to send */
         struct Buffer datagram = game->lastSent;
-        char v = datagram.version, sn = datagram.seqNum, cmd = datagram.command, data = datagram.data, gn = datagram.gameNum;
-        printf("Game #%d: Resending the previous command... \n\t0x%02X 0x%02X 0x%02X 0x%02X 0x%02X\n", game->gameNum, v, sn, cmd, data, gn);
+        /* Print the command being resent */
+        int v = datagram.version, sn = datagram.seqNum, cmd = datagram.command, pos = datagram.data, gn = datagram.gameNum;
+        printf("Game #%d: Resending the previous command... \n", game->gameNum);
+        printf("\tver: %d, seq#: %02d, command: %d, pos: %c (0x%2X), game#: %02d\n", v, sn, cmd, pos, datagram.data, gn);
+        /* Send previously sent command to remote player */
         if (sendto(sd, &datagram, sizeof(struct Buffer), 0, (struct sockaddr *)&game->p2Address, sizeof(struct sockaddr_in)) < 0) {
+            /* Reset game if there was an error sending the command */
             print_error("resend_command", errno, 0);
             reset_game(game);
         }
     } else {
+        /* Exceeded max resends -> reset game */
         print_error("resend_command: Exceeded maximum allowed resend attempts", 0, 0);
         reset_game(game);
     }
@@ -630,7 +654,7 @@ void resend_command(int sd, struct TTT_Game *game) {
  * 
  * @param choice The player move to be validated.
  * @param game The current game of TicTacToe being played.
- * @return True if the given move if valid based on the current board, false otherwise. 
+ * @return True if the given move if valid based on the current game, false otherwise. 
  */
 int validate_move(int choice, const struct TTT_Game *game) {
     /* Check to see if the choice is a move on the board */
@@ -644,7 +668,7 @@ int validate_move(int choice, const struct TTT_Game *game) {
         print_error("Invalid move: Square already taken", 0, 0);
         return 0;
     }
-    /* TODO */
+    /* Check to see if the game has already ended */
     if (game->winner > 0) {
         print_error("Invalid move: Winning move has already been made", 0, 0);
         return 0;
@@ -754,7 +778,7 @@ int send_p1_move(int sd, struct TTT_Game *game) {
     datagram.version = VERSION;
     datagram.seqNum = game->seqNum++;
     datagram.command = MOVE;
-    datagram.data = move+1 + '0';
+    datagram.data = move + '0';
     datagram.gameNum = game->gameNum;
     /* Send the move to the remote player */
     printf("Server sent the move:  %c\n", datagram.data);
@@ -762,7 +786,7 @@ int send_p1_move(int sd, struct TTT_Game *game) {
         print_error("send_p1_move", errno, 0);
         return ERROR_CODE;
     }
-    /* TODO */
+    /* Update last sent command for game */
     game->lastSent = datagram;
     return (datagram.data - '0');
 }
@@ -863,7 +887,9 @@ int check_game_over(struct TTT_Game *game) {
 }
 
 /**
- * @brief Sends TODO to the remote player.
+ * @brief Sends GAME_OVER command to the remote player and puts the current game into a
+ * waiting state to listen for any commands from the remote player that may need to be
+ * processed to end the game.
  * 
  * @param sd The socket descriptor of the server comminication endpoint.
  * @param game The current game of TicTacToe being played.
@@ -875,9 +901,10 @@ void send_game_over(int sd, struct TTT_Game *game) {
     datagram.seqNum = game->seqNum;
     datagram.command = GAME_OVER;
     datagram.gameNum = game->gameNum;
-    /* TODO */
+    /* Update last sent command for game */
     game->lastSent = datagram;
-    game->timeout = 2*GAME_TIMEOUT;
+    /* Update game timeout for grace period to listen for remote player */
+    game->timeout = 2 * GAME_TIMEOUT;
     /* Send the command to the remote player */
     printf("Server sent the GAME_OVER command to Player 2\n");
     if (sendto(sd, &datagram, sizeof(struct Buffer), 0, (struct sockaddr *)&game->p2Address, sizeof(struct sockaddr_in)) < 0) {
@@ -887,7 +914,7 @@ void send_game_over(int sd, struct TTT_Game *game) {
 }
 
 /**
- * @brief Plays a simple game of TicTacToe with a remoye player that ends when either
+ * @brief Plays multiple games of TicTacToe with remoye players that end when either
  * someone wins, there is a draw, or the remote player leaves the game.
  * 
  * @param sd The socket descriptor of the server comminication endpoint.
@@ -911,17 +938,19 @@ void tictactoe(int sd) {
         start = time(NULL);
         /* Wait for a command to be received */
         if ((rv = get_command(sd, &playerAddr, &datagram)) > 0) {
+            /* Get game corresponding to received command */
             int i, gameIndx = (datagram.command == NEW_GAME) ? find_open_game(gameRoster) : datagram.gameNum-1;
             struct TTT_Game *currentGame = (gameIndx < 0) ? NULL : &gameRoster[gameIndx];
+            /* Validate the sequence number of the command and handle possible duplicates */
             if ((rv = validate_sequence_num(&playerAddr, &datagram, currentGame)) > 0) {
-                /* TODO */
+                /* Valid sequence number -> process received command for current game and resent resend counter */
                 commands[(int)datagram.command](sd, &playerAddr, &datagram, currentGame);
                 if (currentGame != NULL) currentGame->resends = MAX_RESENDS;
             } else if (rv == 0) {
-                /* TODO duplicate command */
+                /* Duplicate sequence number -> resent previously sent command */
                 resend_command(sd, currentGame);
             } else if (rv == -1) {
-                /* TODO invalid sequence number */
+                /* Invalid sequence number -> reset game */
                 print_error("tictactoe: Unable to process out of order command", 0, 0);
                 reset_game(currentGame);
             }
@@ -937,27 +966,34 @@ void tictactoe(int sd) {
                     if (i == gameIndx && game->winner < 0) game->timeout = GAME_TIMEOUT;
                 }
             }
-            /* Reset any game that has timed out NOTE */
+            /* Resend previous command for any game that has timed out, reset games who's grace period has ended */
             check_timeout(sd, gameRoster);
             waitPrompt = 1;
         } else if (rv == 0) {   // server has timed out
             int i, numInProgress, numWaiting;
+            /* Stop clock for elapsed time from last command */
+            stop = time(NULL);
+            /* Update game timeout clocks */
+            for (i = 0; i < MAX_GAMES; i++) {
+                struct TTT_Game *game = &gameRoster[i];
+                /* Update timeout clock if game is ongoing */
+                if (game->seqNum > 0) game->timeout -= difftime(stop, start);
+            }
             /* Check if any games are currently being played */
             if ((numInProgress = games_in_progress(&numWaiting, gameRoster))) {
-                waitPrompt = (numWaiting < numInProgress) ? 1 : 0;  // FIXME (doesn't print when GAME_OVER resets)
+                waitPrompt = (numWaiting < numInProgress) ? 1 : 0;
                 if (waitPrompt) print_error("tictactoe: Nobody has responded in a while. Server has timed out", 0, 0);
-                /* Stop clock for elapsed time from last command and update timeout clock for each ongoing game */
-                stop = time(NULL);
-                /* Reset all games NOTE */
+                /* Resent command or reset game */
                 for (i = 0; i < MAX_GAMES; i++) {
                     struct TTT_Game *game = &gameRoster[i];
-                    /* TODO */
+                    /* Check if game is currently ongoing */
                     if (game->seqNum > 0) {
-                        /* Update timeout clock */
-                        game->timeout -= difftime(stop, start);
+                        /* Check if game in waiting state after sending GAME_OVER command */
                         if (game->lastSent.command != GAME_OVER) {
+                            /* Game not in waiting state -> resent previously sent command */
                             resend_command(sd, game);
                         } else if (game->timeout <= 0) {
+                            /* Grace period for waiting game has ended -> reset game */
                             reset_game(game);
                         }
                     }
