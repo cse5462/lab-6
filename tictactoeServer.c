@@ -35,9 +35,9 @@
 /* The number of seconds spend waiting before a game times out. */
 #define GAME_TIMEOUT 30
 /* The number of TODO . */
-#define MAX_RESEND 5
+#define MAX_RESENDS 5
 /* The number of seconds spend waiting before the server times out. */
-#define SERVER_TIMEOUT (2*GAME_TIMEOUT)
+#define SERVER_TIMEOUT (GAME_TIMEOUT/3.0)
 
 /* The number of rows for the TicIacToe board. */
 #define ROWS 3
@@ -100,7 +100,7 @@ int same_address(const struct sockaddr_in *addr1, const struct sockaddr_in *addr
 void init_shared_state(struct TTT_Game *game);
 void reset_game(struct TTT_Game *game);
 void init_game_roster(struct TTT_Game roster[MAX_GAMES]);
-int games_in_progress(struct TTT_Game roster[MAX_GAMES]);
+int games_in_progress(int *numNotOver, struct TTT_Game roster[MAX_GAMES]);
 int find_open_game(struct TTT_Game roster[MAX_GAMES]);
 int get_command(int sd, struct sockaddr_in *playerAddr, struct Buffer *datagram);
 int validate_sequence_num(const struct sockaddr_in *playerAddr, const struct Buffer *datagram, const struct TTT_Game *game);
@@ -360,7 +360,7 @@ void reset_game(struct TTT_Game *game) {
     /* Reset game attributes */
     game->seqNum = 0;
     game->timeout = GAME_TIMEOUT;
-    game->resends = MAX_RESEND;
+    game->resends = MAX_RESENDS;
     game->p2Address = blankAddr;
     game->winner = -1;
     game->lastSent = blankCommand;
@@ -392,13 +392,17 @@ void init_game_roster(struct TTT_Game roster[MAX_GAMES]) {
  * @param roster The array of playable TicTacToe games.
  * @return The number of games currently being played. 
  */
-int games_in_progress(struct TTT_Game roster[MAX_GAMES]) {
+int games_in_progress(int *numWaiting, struct TTT_Game roster[MAX_GAMES]) {
     int i, count = 0;
+    *numWaiting = 0;
     /* Searches over all games */
     for (i = 0; i < MAX_GAMES; i++) {
         struct TTT_Game *game = &roster[i];
         /* Check if current game still in default state or has been started */
-        if (game->seqNum > 0) count++;
+        if (game->seqNum > 0) {
+            if (game->lastSent.command == GAME_OVER && game->timeout > 0) (*numWaiting)++;
+            count++;
+        }
     }
     return count;
 }
@@ -587,6 +591,9 @@ int validate_sequence_num(const struct sockaddr_in *playerAddr, const struct Buf
         } else if (datagram->seqNum == game->seqNum-1) {
             printf("Game #%d received a duplicate command\n", game->gameNum);
             return 0;
+        } else if (datagram->seqNum < game->seqNum-1) {
+            printf("Game #%d received a command that has already been processed\n", game->gameNum);
+            return -2;
         } else {
             return 1;
         }
@@ -747,7 +754,7 @@ int send_p1_move(int sd, struct TTT_Game *game) {
     datagram.version = VERSION;
     datagram.seqNum = game->seqNum++;
     datagram.command = MOVE;
-    datagram.data = move + '0';
+    datagram.data = move+1 + '0';
     datagram.gameNum = game->gameNum;
     /* Send the move to the remote player */
     printf("Server sent the move:  %c\n", datagram.data);
@@ -865,12 +872,12 @@ void send_game_over(int sd, struct TTT_Game *game) {
     struct Buffer datagram = {0};
     /* Pack command information into datagram */
     datagram.version = VERSION;
-    datagram.seqNum = game->seqNum++;
+    datagram.seqNum = game->seqNum;
     datagram.command = GAME_OVER;
     datagram.gameNum = game->gameNum;
     /* TODO */
     game->lastSent = datagram;
-    game->timeout = SERVER_TIMEOUT;
+    game->timeout = 2*GAME_TIMEOUT;
     /* Send the command to the remote player */
     printf("Server sent the GAME_OVER command to Player 2\n");
     if (sendto(sd, &datagram, sizeof(struct Buffer), 0, (struct sockaddr *)&game->p2Address, sizeof(struct sockaddr_in)) < 0) {
@@ -909,11 +916,11 @@ void tictactoe(int sd) {
             if ((rv = validate_sequence_num(&playerAddr, &datagram, currentGame)) > 0) {
                 /* TODO */
                 commands[(int)datagram.command](sd, &playerAddr, &datagram, currentGame);
-                if (currentGame != NULL) currentGame->resends = MAX_RESEND;
+                if (currentGame != NULL) currentGame->resends = MAX_RESENDS;
             } else if (rv == 0) {
                 /* TODO duplicate command */
                 resend_command(sd, currentGame);
-            } else {
+            } else if (rv == -1) {
                 /* TODO invalid sequence number */
                 print_error("tictactoe: Unable to process out of order command", 0, 0);
                 reset_game(currentGame);
@@ -934,23 +941,27 @@ void tictactoe(int sd) {
             check_timeout(sd, gameRoster);
             waitPrompt = 1;
         } else if (rv == 0) {   // server has timed out
-            int i;
+            int i, numInProgress, numWaiting;
             /* Check if any games are currently being played */
-            if (games_in_progress(gameRoster) > 0) {
-                print_error("tictactoe: Nobody has responded in a while. Server has timed out", 0, 0);
+            if ((numInProgress = games_in_progress(&numWaiting, gameRoster))) {
+                waitPrompt = (numWaiting < numInProgress) ? 1 : 0;  // FIXME (doesn't print when GAME_OVER resets)
+                if (waitPrompt) print_error("tictactoe: Nobody has responded in a while. Server has timed out", 0, 0);
+                /* Stop clock for elapsed time from last command and update timeout clock for each ongoing game */
+                stop = time(NULL);
                 /* Reset all games NOTE */
                 for (i = 0; i < MAX_GAMES; i++) {
                     struct TTT_Game *game = &gameRoster[i];
                     /* TODO */
                     if (game->seqNum > 0) {
+                        /* Update timeout clock */
+                        game->timeout -= difftime(stop, start);
                         if (game->lastSent.command != GAME_OVER) {
                             resend_command(sd, game);
-                        } else {
+                        } else if (game->timeout <= 0) {
                             reset_game(game);
                         }
                     }
                 }
-                waitPrompt = 1;
             } else {
                 waitPrompt = 0;
             }
